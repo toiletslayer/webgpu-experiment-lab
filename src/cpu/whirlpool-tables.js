@@ -1,5 +1,6 @@
 // Generated from CapStash-Core src/crypto/whirlpool/whirlpool.c plain WHIRLPOOL constants.
 // Do not edit by hand; regenerate from the audited Core source when Core changes.
+// Upstream SPHlib/Projet RNRT SAPHIR MIT attribution: THIRD_PARTY_NOTICES.md.
 
 export const PLAIN_T0 = Object.freeze([
   0xD83078C018601818n,

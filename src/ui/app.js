@@ -94,6 +94,7 @@ import {
 } from "../webgpu/workgroup-experiment.js";
 import {
   WEBMCP_VERIFICATION_LEVELS,
+  WEBMCP_WORKGROUP_COMPARISON_CONSENT,
   WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
   WEBMCP_WORKGROUP_COMPARISON_STAGES,
   admitWorkgroupComparisonStart,
@@ -101,8 +102,10 @@ import {
   buildExperimentStatusResult,
   buildStartWorkgroupComparisonResult,
   buildVerificationResult,
+  buildWorkgroupComparisonConsentPendingResult,
   buildWorkgroupComparisonStatus,
   registerWebMCPChallengeTools,
+  runAfterWorkgroupComparisonConsent,
   runPrerequisiteAwareWorkgroupComparison,
   runWorkgroupComparisonPrerequisites,
 } from "../webmcp/challenge-tools.js";
@@ -179,6 +182,7 @@ const state = {
   workgroupComparisonExperimentCounter: 0,
   activeStandaloneExperiment: null,
   webmcpRegistration: null,
+  webmcpComparisonConsentPending: false,
   animationFrame: 0,
 };
 
@@ -546,6 +550,15 @@ function isExperimentRunning() {
 }
 
 function currentExperimentSummary() {
+  if (state.webmcpComparisonConsentPending) {
+    return {
+      type: "matched_workgroup_comparison",
+      source: "webmcp",
+      status: WEBMCP_WORKGROUP_COMPARISON_STAGES.awaitingConsent,
+      stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.awaitingConsent,
+      workloadStarted: false,
+    };
+  }
   if (state.workgroupComparisonExperiment?.status === "running") {
     return {
       type: state.workgroupComparisonExperiment.type,
@@ -786,20 +799,33 @@ async function executeWebMCPWorkgroupComparison(experimentId) {
   }
 }
 
-function startWorkgroupComparisonForWebMCP({ signal } = {}) {
-  if (signal?.aborted) throw signal.reason;
-  const conflict = currentExperimentSummary();
-  if (isExperimentRunning()) {
-    return admitWorkgroupComparisonStart({ running: true, currentExperiment: conflict });
+function requestWorkgroupComparisonConsent({ signal } = {}) {
+  const panel = els.webmcpComparisonConsent;
+  const approveButton = els.approveWebmcpComparison;
+  const declineButton = els.declineWebmcpComparison;
+  if (!panel || !approveButton || !declineButton) {
+    return Promise.resolve(false);
   }
-  if (!state.capabilities?.supported) {
-    return buildStartWorkgroupComparisonResult({
-      experiment: null,
-      conflict: { type: "environment", error: state.capabilities?.error || "WebGPU unavailable" },
-      reason: "WebGPU is unavailable; the comparison was not started.",
-    });
-  }
-  setTestType(TEST_TYPES.matched);
+  return new Promise((resolve) => {
+    const finish = (approved) => {
+      signal?.removeEventListener("abort", abort);
+      approveButton.removeEventListener("click", approve);
+      declineButton.removeEventListener("click", decline);
+      panel.hidden = true;
+      resolve(approved);
+    };
+    const approve = () => finish(true);
+    const decline = () => finish(false);
+    const abort = () => finish(false);
+    approveButton.addEventListener("click", approve, { once: true });
+    declineButton.addEventListener("click", decline, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
+    panel.hidden = false;
+    declineButton.focus();
+  });
+}
+
+function beginApprovedWebMCPWorkgroupComparison() {
   state.workgroupRepetitions = WEBMCP_WORKGROUP_COMPARISON_REPETITIONS;
   els.workgroupRepetitionSelect.value = String(WEBMCP_WORKGROUP_COMPARISON_REPETITIONS);
   els.guidedMatchedRepetitions.value = String(WEBMCP_WORKGROUP_COMPARISON_REPETITIONS);
@@ -816,6 +842,11 @@ function startWorkgroupComparisonForWebMCP({ signal } = {}) {
     startedAt,
     completedAt: null,
     error: null,
+    consent: {
+      approved: true,
+      approvedAt: startedAt,
+      disclosure: WEBMCP_WORKGROUP_COMPARISON_CONSENT,
+    },
   };
   state.workgroupComparisonExperiment = experiment;
   state.workgroupMatchedComparison = null;
@@ -825,6 +856,43 @@ function startWorkgroupComparisonForWebMCP({ signal } = {}) {
   renderBenchmark();
   Promise.resolve().then(() => executeWebMCPWorkgroupComparison(experiment.id));
   return admitWorkgroupComparisonStart({ running: false, experiment });
+}
+
+function startWorkgroupComparisonForWebMCP({ signal } = {}) {
+  if (signal?.aborted) throw signal.reason;
+  const conflict = currentExperimentSummary();
+  if (isExperimentRunning() || state.webmcpComparisonConsentPending) {
+    return admitWorkgroupComparisonStart({ running: true, currentExperiment: conflict });
+  }
+  if (!state.capabilities?.supported) {
+    return buildStartWorkgroupComparisonResult({
+      experiment: null,
+      conflict: { type: "environment", error: state.capabilities?.error || "WebGPU unavailable" },
+      reason: "WebGPU is unavailable; the comparison was not started.",
+    });
+  }
+  setTestType(TEST_TYPES.matched);
+  state.webmcpComparisonConsentPending = true;
+  state.matchedProgress = "WebMCP requested the long local comparison. Waiting for explicit user approval; no GPU workload has started.";
+  renderBenchmark();
+  setStatus("Waiting for approval before local GPU comparison", "neutral");
+  Promise.resolve().then(() => runAfterWorkgroupComparisonConsent({
+      requestConsent: () => requestWorkgroupComparisonConsent(),
+      startApprovedWorkload: beginApprovedWebMCPWorkgroupComparison,
+    })).then((result) => {
+    if (!result.accepted) {
+      state.matchedProgress = "WebMCP comparison declined. No prerequisite verification or profiling work started.";
+      renderBenchmark();
+      setStatus("Local GPU comparison declined; no workload started", "neutral");
+    }
+  }).catch((error) => {
+    state.matchedProgress = `Consent request failed closed: ${error instanceof Error ? error.message : String(error)}. No workload started.`;
+    renderBenchmark();
+    setStatus("Consent failed closed; no workload started", "bad");
+  }).finally(() => {
+    state.webmcpComparisonConsentPending = false;
+  });
+  return buildWorkgroupComparisonConsentPendingResult();
 }
 
 function wgslPresetWarning(preset = selectedWgslPreset()) {
@@ -2784,6 +2852,9 @@ function collectElements() {
       "guidedRunMatchedComparison",
       "matchedDisabledReason",
       "matchedProgress",
+      "webmcpComparisonConsent",
+      "approveWebmcpComparison",
+      "declineWebmcpComparison",
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -3057,7 +3128,7 @@ export async function main() {
   await loadCoreVectorStatus();
   renderCorrectness();
   renderBenchmark();
-  setStatus(state.correctness.pass ? "Ready" : "Correctness failure", state.correctness.pass ? "good" : "bad");
+  setStatus(state.correctness.pass ? "Ready — no workload running" : "Correctness failure", state.correctness.pass ? "good" : "bad");
   state.capabilities = await detectWebGPUCapabilities();
   renderCapabilities();
   state.webmcpRegistration = await registerWebMCPChallengeTools({

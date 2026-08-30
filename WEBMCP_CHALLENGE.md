@@ -1,4 +1,4 @@
-# WebMCP Challenge — Milestones 1 and 2
+# WebMCP Challenge — Milestones 1 and 2 with Browser Validation
 
 ## Baseline
 
@@ -71,7 +71,7 @@ Goal: report the current or most recent shared correctness experiment and its st
 
 ## Safety Boundaries
 
-This milestone remains a correctness-only local browser proof. It does not add or expose:
+Milestone 1 remains a correctness-only local browser proof. It does not add or expose:
 
 - live or network mining;
 - target comparison or block submission;
@@ -105,7 +105,10 @@ The challenge-period addition is the asynchronous, prerequisite-aware controller
 
 ### `start_workgroup_comparison`
 
-Goal: start the existing conservative three-repetition-per-size WG1-vs-WG32 workflow and return immediately.
+Goal: request visible user approval and immediately return an
+`awaiting_consent` acknowledgement. The page then starts the existing
+conservative three-repetition-per-size WG1-vs-WG32 workflow only after approval,
+while the workflow continues asynchronously.
 
 ```json
 {
@@ -125,7 +128,27 @@ The tool refuses conflicting experiments, selects the existing matched-compariso
 6. WG32 full 294-vector verification
 7. Existing matched WG1-vs-WG32 comparison with three repetitions per size
 
-The start result contains an experiment ID, `running` state, `queued` stage, and the planned repetition count. It does not hold the tool call open during cold pipeline creation or profiling. Computation begins only after an explicit start invocation.
+The first result reports `requestAccepted: true`, `workloadStarted: false`, and
+`state: "awaiting_consent"`. It does not hold the tool call open while the user
+reads the disclosure, during cold pipeline creation, or during profiling. After
+approval, `get_experiment_status` reports the experiment ID, `running` state,
+`queued` stage, and subsequent progress. Computation begins only after an
+explicit start invocation and explicit approval in the visible page modal.
+
+### Long-workload consent
+
+Chrome's currently implemented imperative callback supplies cancellation through
+an `AbortSignal`, but does not provide a dependable standardized
+`requestUserInteraction()` confirmation method in the API surface used here.
+The integration therefore uses an ordinary, accessible page-level modal instead
+of inventing a WebMCP API. It does not depend on native `<dialog>` support.
+
+The modal appears before any prerequisite verification or profiling dispatch.
+It discloses three matched repetitions per size, six profiling samples, 49,152
+profiled hashes, local-only execution, the absence of network/pool/wallet/RPC or
+submission activity, and that already-submitted GPU dispatches cannot
+necessarily be interrupted. Approval starts the existing asynchronous workflow.
+Declining returns `accepted: false`, `state: "declined"`, and starts no GPU work.
 
 ### Extended `get_experiment_status`
 
@@ -160,12 +183,61 @@ Milestone 2 does not expose `cancel_experiment`. The existing browser workflow c
 
 1. Run `npm run dev` and open `http://127.0.0.1:8080/` in a WebGPU/WebMCP-capable browser.
 2. Confirm `document.modelContext.getTools()` includes `start_workgroup_comparison` in addition to the Milestone 1 tools.
-3. Invoke `start_workgroup_comparison` with `{}` and confirm it promptly returns `accepted: true`, a non-empty experiment ID, `state: "running"`, and `stage: "queued"`.
-4. Poll `get_experiment_status` with `{}`. Confirm stages advance through missing WG1/WG32 prerequisites and then `matched_comparison` without holding the start call open.
-5. Watch the existing Matched WG1-vs-WG32 UI. Confirm compile, small-gate, and full-294 checks become satisfied for both sizes and matched repetition progress is visible.
-6. Confirm the final status is `completed`, both sizes have three valid samples, all correctness failures are absent, and the structured measurements match the visible UI.
-7. If variability or another existing blocker applies, confirm `recommendationAllowed` is `false`, `recommendation` is `null`, and the exact existing blockers are returned.
-8. Switch between Guided and Advanced after completion and confirm the result, raw diagnostics, and normal human controls remain usable.
-9. Reload with WebMCP disabled and confirm no computation starts and the existing human UI still works.
+3. Invoke `start_workgroup_comparison` with `{}`. Confirm it promptly returns
+   `requestAccepted: true`, `workloadStarted: false`, and
+   `state: "awaiting_consent"`; confirm the visible consent modal appears and no
+   prerequisite changes before approval.
+4. Approve the modal, then call `get_experiment_status` and confirm a non-empty
+   experiment ID, `running` state, and `queued` or later stage.
+5. Poll `get_experiment_status` with `{}`. Confirm stages advance through missing WG1/WG32 prerequisites and then `matched_comparison` without holding the start call open.
+6. Watch the existing Matched WG1-vs-WG32 UI. Confirm compile, small-gate, and full-294 checks become satisfied for both sizes and matched repetition progress is visible.
+7. Confirm the final status is `completed`, both sizes have three valid samples, all correctness failures are absent, and the structured measurements match the visible UI.
+8. If variability or another existing blocker applies, confirm `recommendationAllowed` is `false`, `recommendation` is `null`, and the exact existing blockers are returned.
+9. Invoke again and decline the dialog; confirm no prerequisite or profiling work starts.
+10. Switch between Guided and Advanced after completion and confirm the result, raw diagnostics, and normal human controls remain usable.
+11. Reload with WebMCP disabled and confirm no computation starts and the existing human UI still works.
+
+## Completed Real-Browser Validation
+
+Milestone 1 and Milestone 2 were validated end-to-end in one normal Chrome
+WebGPU/WebMCP session before release hardening.
+
+Milestone 1 evidence:
+
+- four tools were registered after Milestone 2;
+- environment inspection started no workload;
+- minimal correctness returned `1 / 1` selected matches and `0` mismatches;
+- full correctness returned `294 / 294` selected matches and `0` mismatches;
+- status reflected the same shared result shown by the page.
+
+Milestone 2 evidence from that session:
+
+- the asynchronous start acknowledgement returned immediately;
+- completion took approximately `46.7` seconds;
+- WG1 full verification passed `294 / 294`;
+- WG32 full verification passed `294 / 294`;
+- WG1 produced `3` valid samples and WG32 produced `3` valid samples;
+- `49,152` hashes were requested, completed, and returned;
+- `30` CPU spot checks passed;
+- mismatches, pipeline errors, device losses, and deterministic ordering failures
+  were all `0`;
+- WG32's observed mean throughput difference was approximately `+2.21%`;
+- WG32 total elapsed CV was approximately `13.32%`;
+- WG32 throughput CV was approximately `13.87%`;
+- policy thresholds were `10%` maximum total-time CV, `10%` maximum throughput
+  CV, and `5%` minimum practical throughput difference;
+- final classification was `host-side variability too high for a recommendation`;
+- `recommendationAllowed` was `false` and `recommendation` was `null`.
+
+This is one browser/session observation. It is correctness and workflow evidence,
+not a universal GPU-performance claim or a claim that WG32 is faster generally.
+
+## Release-Hardening Status Output
+
+`get_experiment_status` retains the evidence an agent needs—lifecycle, stages,
+prerequisites, sample counts, headline timing/throughput statistics, relative
+differences, thresholds, failures, classification, recommendation permission,
+blockers, and errors—while omitting per-sample low-level arrays and detailed
+invocation rows. Those remain visible and exportable in the human Advanced UI.
 
 Current WebMCP references: [Chrome WebMCP documentation](https://developer.chrome.com/docs/ai/webmcp) and the [WebMCP draft](https://webmachinelearning.github.io/webmcp/).

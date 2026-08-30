@@ -35,7 +35,18 @@ export const WEBMCP_TOOL_SCHEMAS = Object.freeze({
 
 export const WEBMCP_WORKGROUP_COMPARISON_REPETITIONS = 3;
 
+export const WEBMCP_WORKGROUP_COMPARISON_CONSENT = Object.freeze({
+  required: true,
+  localOnly: true,
+  hashesPerProfile: 8192,
+  repetitionsPerSize: WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
+  totalMatchedSamples: 6,
+  totalProfiledHashes: 49152,
+  warning: "Already-submitted GPU dispatches cannot necessarily be interrupted. No network, pool, wallet, payout, RPC, or block-submission service is used.",
+});
+
 export const WEBMCP_WORKGROUP_COMPARISON_STAGES = Object.freeze({
+  awaitingConsent: "awaiting_consent",
   queued: "queued",
   wg1Compile: "wg1_compile",
   wg1SmallGate: "wg1_small_gate",
@@ -45,6 +56,7 @@ export const WEBMCP_WORKGROUP_COMPARISON_STAGES = Object.freeze({
   wg32Full294: "wg32_full_294",
   matchedComparison: "matched_comparison",
   completed: "completed",
+  declined: "declined",
   failed: "failed",
 });
 
@@ -218,6 +230,40 @@ function workgroupPrerequisiteStatus(status = {}) {
   };
 }
 
+function compactMetricStats(stats) {
+  if (!stats) return null;
+  return {
+    mean: stats.mean ?? null,
+    median: stats.median ?? null,
+    min: stats.min ?? null,
+    max: stats.max ?? null,
+    sampleCoefficientOfVariation: stats.sampleCoefficientOfVariation ?? null,
+  };
+}
+
+function compactWorkgroupMeasurements(aggregate) {
+  if (!aggregate) return null;
+  return {
+    validRepetitionCount: aggregate.validRepetitionCount || 0,
+    invalidRepetitionCount: aggregate.invalidRepetitionCount || 0,
+    totalElapsedMs: compactMetricStats(aggregate.totalElapsedMs),
+    queueCompletionWaitMs: compactMetricStats(aggregate.queueCompletionWaitMs),
+    cpuValidationMs: compactMetricStats(aggregate.cpuValidationMs),
+    hashesPerSecondIncludingPipeline: compactMetricStats(aggregate.hashesPerSecondIncludingPipeline),
+  };
+}
+
+function compactAction(action) {
+  if (!action) return null;
+  return {
+    status: action.status || null,
+    requestedActionType: action.requestedActionType || null,
+    startedActionType: action.startedActionType || null,
+    workgroupSize: action.workgroupSize ?? null,
+    startedAt: action.actionStartTimestamp || null,
+  };
+}
+
 export function buildWorkgroupComparisonStatus({
   experiment,
   statuses = {},
@@ -255,19 +301,18 @@ export function buildWorkgroupComparisonStatus({
       wg1: experiment.completedRepetitions?.wg1 || 0,
       wg32: experiment.completedRepetitions?.wg32 || 0,
     },
-    currentAction,
+    currentAction: compactAction(currentAction),
     prerequisites: {
       wg1: workgroupPrerequisiteStatus(statuses[1]),
       wg32: workgroupPrerequisiteStatus(statuses[32]),
     },
     measurements: comparison
       ? {
-          wg1: comparison.aggregate?.[1] || null,
-          wg32: comparison.aggregate?.[32] || null,
+          wg1: compactWorkgroupMeasurements(comparison.aggregate?.[1]),
+          wg32: compactWorkgroupMeasurements(comparison.aggregate?.[32]),
           differences: comparison.differences || null,
           thresholds: comparison.thresholds || null,
-          executionOrder: comparison.configuration?.executionOrder || [],
-          executedProfilingAccounting: comparison.executedProfilingAccounting || null,
+          executedProfilingAccounting: comparison.executedProfilingAccounting?.combined || null,
         }
       : null,
     correctnessFailures,
@@ -315,6 +360,37 @@ export function buildStartWorkgroupComparisonResult({ experiment, conflict = nul
     plannedRepetitions: experiment?.plannedRepetitions || WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
     message: "The existing prerequisite-aware WG1-vs-WG32 workflow started asynchronously. Poll get_experiment_status for progress and results.",
   };
+}
+
+export function buildWorkgroupComparisonConsentDeclinedResult(reason = "The user declined the local GPU workload.") {
+  return {
+    accepted: false,
+    state: WEBMCP_WORKGROUP_COMPARISON_STAGES.declined,
+    experimentId: null,
+    reason,
+    consent: WEBMCP_WORKGROUP_COMPARISON_CONSENT,
+  };
+}
+
+export function buildWorkgroupComparisonConsentPendingResult() {
+  return {
+    accepted: false,
+    requestAccepted: true,
+    workloadStarted: false,
+    state: WEBMCP_WORKGROUP_COMPARISON_STAGES.awaitingConsent,
+    experimentId: null,
+    message: "A visible page confirmation is awaiting the user. No verification or profiling workload has started. After a decision, poll get_experiment_status.",
+    consent: WEBMCP_WORKGROUP_COMPARISON_CONSENT,
+  };
+}
+
+export async function runAfterWorkgroupComparisonConsent({ requestConsent, startApprovedWorkload } = {}) {
+  if (typeof requestConsent !== "function" || typeof startApprovedWorkload !== "function") {
+    throw new TypeError("Consent and approved-workload handlers are required");
+  }
+  const approved = await requestConsent();
+  if (!approved) return buildWorkgroupComparisonConsentDeclinedResult();
+  return startApprovedWorkload();
 }
 
 export function admitWorkgroupComparisonStart({ running, currentExperiment = null, experiment = null } = {}) {
@@ -376,7 +452,7 @@ export function createWebMCPChallengeTools(handlers) {
     {
       name: "start_workgroup_comparison",
       title: "Start WG1-vs-WG32 comparison",
-      description: "Start the existing prerequisite-aware matched WG1-vs-WG32 correctness and profiling workflow asynchronously. Poll get_experiment_status for progress and the conservative recommendation result.",
+      description: "After visible user approval, start the existing local prerequisite-aware WG1-vs-WG32 correctness and profiling workflow asynchronously. Poll get_experiment_status for progress and the conservative result.",
       inputSchema: WEBMCP_TOOL_SCHEMAS.startWorkgroupComparison,
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       execute: (_arguments = {}, options = {}) => handlers.startWorkgroupComparison({ signal: options.signal }),

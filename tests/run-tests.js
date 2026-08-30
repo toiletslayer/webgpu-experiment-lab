@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { resolveServedFile } from "../scripts/dev-server.js";
 import {
   EXECUTION_MODES,
   benchmarkSnapshot,
@@ -166,6 +167,7 @@ import {
 import {
   WEBMCP_TOOL_SCHEMAS,
   WEBMCP_VERIFICATION_LEVELS,
+  WEBMCP_WORKGROUP_COMPARISON_CONSENT,
   WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
   WEBMCP_WORKGROUP_COMPARISON_STAGES,
   admitWorkgroupComparisonStart,
@@ -173,9 +175,11 @@ import {
   buildExperimentStatusResult,
   buildStartWorkgroupComparisonResult,
   buildVerificationResult,
+  buildWorkgroupComparisonConsentPendingResult,
   buildWorkgroupComparisonStatus,
   createWebMCPChallengeTools,
   registerWebMCPChallengeTools,
+  runAfterWorkgroupComparisonConsent,
   runPrerequisiteAwareWorkgroupComparison,
   runWorkgroupComparisonPrerequisites,
 } from "../src/webmcp/challenge-tools.js";
@@ -2219,6 +2223,9 @@ test("matched WG1 vs WG32 comparison aggregates samples and blocks high variabil
   assert.deepEqual(webmcpStatus.recommendation.blockers, comparison.recommendationBlockers);
   assert.equal(webmcpStatus.measurements.wg1.validRepetitionCount, 3);
   assert.equal(webmcpStatus.measurements.wg32.validRepetitionCount, 3);
+  assert.equal(webmcpStatus.measurements.wg32.totalElapsedMs.sampleCoefficientOfVariation > 0.1, true);
+  assert.equal(webmcpStatus.measurements.executedProfilingAccounting.totalCompletedHashes, 49152);
+  assert.doesNotMatch(JSON.stringify(webmcpStatus), /perRepetition|executionOrderIndex|resultDecodingMs/);
   assert.equal(comparison.boundaries.matchedWorkgroupComparison, true);
   assert.equal(comparison.boundaries.liveMining, false);
   assert.equal(comparison.boundaries.targetComparison, false);
@@ -3582,6 +3589,39 @@ test("WebMCP workgroup start acknowledgement is asynchronous and refuses conflic
   assert.equal(blocked.conflictingExperiment.type, "correctness_verification");
 });
 
+test("WebMCP long comparison requires consent and decline starts no workload", async () => {
+  let starts = 0;
+  const pending = buildWorkgroupComparisonConsentPendingResult();
+  assert.equal(pending.accepted, false);
+  assert.equal(pending.requestAccepted, true);
+  assert.equal(pending.workloadStarted, false);
+  assert.equal(pending.state, WEBMCP_WORKGROUP_COMPARISON_STAGES.awaitingConsent);
+
+  const declined = await runAfterWorkgroupComparisonConsent({
+    requestConsent: async () => false,
+    startApprovedWorkload: () => {
+      starts += 1;
+      return { accepted: true };
+    },
+  });
+  assert.equal(declined.accepted, false);
+  assert.equal(declined.state, WEBMCP_WORKGROUP_COMPARISON_STAGES.declined);
+  assert.equal(declined.consent.totalMatchedSamples, 6);
+  assert.equal(declined.consent.totalProfiledHashes, 49152);
+  assert.equal(starts, 0);
+
+  const approved = await runAfterWorkgroupComparisonConsent({
+    requestConsent: async () => true,
+    startApprovedWorkload: () => {
+      starts += 1;
+      return { accepted: true, state: "running" };
+    },
+  });
+  assert.equal(approved.accepted, true);
+  assert.equal(starts, 1);
+  assert.equal(WEBMCP_WORKGROUP_COMPARISON_CONSENT.localOnly, true);
+});
+
 test("WebMCP workgroup orchestration reuses passed prerequisites and sequences existing actions", async () => {
   const progress = {
     1: { compilePassed: true, smallGatePassed: false, full294Passed: false },
@@ -3721,9 +3761,13 @@ test("WebMCP app adapter reuses the visible minimal Whirlpool workflow", () => {
   assert.doesNotMatch(integration, /navigator\.gpu|requestAdapter|runWebGPUWhirlpoolFixtureSuite|createComputePipeline/);
 });
 
-test("WebMCP workgroup adapter starts asynchronously through the existing visible experiment path", () => {
+test("WebMCP workgroup adapter requires visible consent before asynchronously using the existing path", () => {
   const app = readFileSync(new URL("../src/ui/app.js", import.meta.url), "utf8");
-  const start = app.slice(
+  const approvedStart = app.slice(
+    app.indexOf("function beginApprovedWebMCPWorkgroupComparison"),
+    app.indexOf("function startWorkgroupComparisonForWebMCP"),
+  );
+  const consentStart = app.slice(
     app.indexOf("function startWorkgroupComparisonForWebMCP"),
     app.indexOf("function wgslPresetWarning"),
   );
@@ -3731,11 +3775,61 @@ test("WebMCP workgroup adapter starts asynchronously through the existing visibl
     app.indexOf("async function executeWebMCPWorkgroupComparison"),
     app.indexOf("function startWorkgroupComparisonForWebMCP"),
   );
-  assert.match(start, /Promise\.resolve\(\)\.then\(\(\) => executeWebMCPWorkgroupComparison/);
+  assert.match(approvedStart, /Promise\.resolve\(\)\.then\(\(\) => executeWebMCPWorkgroupComparison/);
+  assert.match(consentStart, /runAfterWorkgroupComparisonConsent/);
+  assert.match(consentStart, /requestWorkgroupComparisonConsent/);
+  assert.match(consentStart, /No prerequisite verification or profiling work started/);
   assert.match(execution, /runPrerequisiteAwareWorkgroupComparison/);
   assert.match(execution, /runWorkgroupExperimentAction\(action, \{ orchestrationId: experimentId \}\)/);
   assert.match(execution, /WORKGROUP_EXPERIMENT_ACTIONS\.matchedComparison/);
   assert.match(app, /runWorkgroupComparisonPrerequisites/);
   assert.match(app, /state\.workgroupMatchedComparison/);
   assert.doesNotMatch(execution, /runWorkgroupCompileGate|runWorkgroupSmallGate|runWorkgroupFullVerification|runWorkgroupSyntheticProfiling|buildMatchedWorkgroupComparison/);
+});
+
+test("release safety notices, licensing, provenance, and static headers are present", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const license = readFileSync(new URL("../LICENSE", import.meta.url), "utf8");
+  const notices = readFileSync(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8");
+  const provenance = readFileSync(new URL("../PROVENANCE.md", import.meta.url), "utf8");
+  const headers = readFileSync(new URL("../_headers", import.meta.url), "utf8");
+  const deployment = readFileSync(new URL("../DEPLOYMENT.md", import.meta.url), "utf8");
+  for (const text of [html, readme]) {
+    assert.match(text, /All computation is local and explicitly user-triggered/);
+    assert.match(text, /block-submission service/);
+  }
+  assert.match(html, /CapStash Proof-of-Work Verification &amp; WebGPU Lab/);
+  assert.match(html, /49,152 profiled Whirlpool hashes/);
+  assert.match(html, /Already-submitted GPU dispatches cannot necessarily be interrupted/);
+  assert.match(license, /Copyright \(c\) 2026 Toiletslayer/);
+  assert.match(notices, /Copyright \(c\) 2007-2010 Projet RNRT SAPHIR/);
+  assert.match(notices, /d5443789469376ca3cad2a892ab99978b88a4471/);
+  assert.match(provenance, /bbb0405142c6bd61f996179e949e6ad2ff755413/);
+  assert.match(provenance, /reconstruct.*personal commit metadata/i);
+  assert.match(headers, /Origin-Agent-Cluster: \?1/);
+  assert.match(headers, /Permissions-Policy: tools=\(self\)/);
+  assert.doesNotMatch(headers, /^\s*Origin-Trial:\s*\S+/m);
+  assert.match(deployment, /localhost development only/i);
+  assert.match(deployment, /must not be exposed as the\s+public deployment server/i);
+});
+
+test("page initialization and WebMCP absence remain harmless", () => {
+  const app = readFileSync(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const main = app.slice(app.indexOf("export async function main()"), app.lastIndexOf("main();"));
+  assert.match(main, /runCorrectnessTests/);
+  assert.match(main, /detectWebGPUCapabilities/);
+  assert.match(main, /modelContext: document\.modelContext \|\| null/);
+  assert.doesNotMatch(main, /runWhirlpoolMinimalProof\(|executeWebMCPWorkgroupComparison\(|runSyntheticProfiling\(/);
+});
+
+test("localhost dev server rejects traversal and dotfiles with path-aware containment", () => {
+  const servedRoot = "C:\\audit-served-root";
+  assert.equal(resolveServedFile(servedRoot, "/").status, 200);
+  assert.equal(resolveServedFile(servedRoot, "/src/ui/app.js").status, 200);
+  assert.equal(resolveServedFile(servedRoot, "/.git/config").status, 403);
+  assert.equal(resolveServedFile(servedRoot, "/src/.hidden/file").status, 403);
+  assert.equal(resolveServedFile(servedRoot, "/%2e%2e/private.txt").status, 403);
+  assert.equal(resolveServedFile(servedRoot, "/..%5cprivate.txt").status, 403);
+  assert.equal(resolveServedFile(servedRoot, "/%E0%A4%A").status, 400);
 });

@@ -90,6 +90,10 @@ Expected current status:
 npm run dev
 ```
 
+The bundled server binds only to `127.0.0.1`, rejects traversal and dotfiles,
+and is intended only for local development. **This server is for localhost
+development only and must not be exposed as the public deployment server.**
+
 PowerShell execution-policy alternative:
 
 ```powershell

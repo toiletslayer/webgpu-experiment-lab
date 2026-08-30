@@ -3,17 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CapStash Browser WebGPU Benchmark</title>
+    <title>CapStash Proof-of-Work Verification &amp; WebGPU Lab</title>
     <link rel="stylesheet" href="./src/ui/styles.css" />
   </head>
   <body>
     <main>
       <section class="topbar" aria-labelledby="title">
         <div>
-          <p class="eyebrow">Research prototype</p>
-          <h1 id="title">CapStash Browser WebGPU Benchmark</h1>
+          <p class="eyebrow">Explicit local verification research</p>
+          <h1 id="title">CapStash Proof-of-Work Verification &amp; WebGPU Lab</h1>
         </div>
-        <div id="status" class="status" data-kind="neutral">Loading</div>
+        <div id="status" class="status" data-kind="neutral">Initializing — no workload running</div>
+      </section>
+
+      <section class="safety-notice" aria-labelledby="safety-notice-title">
+        <h2 id="safety-notice-title">Local, explicit, and disconnected from mining networks</h2>
+        <p><strong>This project uses CapStash Proof-of-Work and Whirlpool hashing as a deterministic real-world WebGPU compute workload.</strong> All computation is local and explicitly user-triggered. It does not connect to a blockchain network, pool, wallet, payout system, RPC service, or block-submission service.</p>
       </section>
 
       <section class="grid metrics" aria-label="Browser WebGPU Performance">
@@ -26,7 +31,7 @@
           <strong id="hashingBackend">CPU JavaScript</strong>
         </div>
         <div>
-          <span>GPU Used For Hashing</span>
+          <span>GPU Hashing Active</span>
           <strong id="gpuHashing">No</strong>
         </div>
         <div>
@@ -270,7 +275,7 @@
           <p>Used only after full 294-vector verification; the first manual action should run compile/device validation and the small gate only.</p>
         </div>
         <div class="actions">
-          <button id="start" class="primary" type="button">Start Benchmark</button>
+          <button id="start" class="primary" type="button">Start Local Bounded Run</button>
           <button id="stop" type="button" disabled>Stop</button>
         </div>
       </section>
@@ -796,6 +801,22 @@
         <ul id="testList"></ul>
       </section>
     </main>
+    <div id="webmcpComparisonConsent" class="consent-overlay" role="dialog" aria-modal="true" aria-labelledby="webmcp-consent-title" hidden>
+      <section class="consent-dialog">
+        <h2 id="webmcp-consent-title">Approve the longer local WebGPU comparison?</h2>
+        <p>An agent requested the correctness-gated WG1-vs-WG32 comparison. It first verifies both pipelines, then runs 3 matched repetitions per size: 6 profiling samples and 49,152 profiled Whirlpool hashes in total.</p>
+        <ul>
+          <li>Computation stays on this device and does not participate in a network.</li>
+          <li>No pool, Stratum, wallet, payout, RPC, target comparison, or block submission is used.</li>
+          <li>The validated run took about 46.7 seconds, but duration varies by browser and GPU.</li>
+          <li>Already-submitted GPU dispatches cannot necessarily be interrupted.</li>
+        </ul>
+        <div class="actions">
+          <button id="declineWebmcpComparison" type="button">Decline — do not start</button>
+          <button id="approveWebmcpComparison" class="primary" type="button">Approve local comparison</button>
+        </div>
+      </section>
+    </div>
     <script type="module" src="./src/ui/app.js"></script>
   </body>
 </html>
