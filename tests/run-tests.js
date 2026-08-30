@@ -166,11 +166,18 @@ import {
 import {
   WEBMCP_TOOL_SCHEMAS,
   WEBMCP_VERIFICATION_LEVELS,
+  WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
+  WEBMCP_WORKGROUP_COMPARISON_STAGES,
+  admitWorkgroupComparisonStart,
   buildComputeEnvironmentResult,
   buildExperimentStatusResult,
+  buildStartWorkgroupComparisonResult,
   buildVerificationResult,
+  buildWorkgroupComparisonStatus,
   createWebMCPChallengeTools,
   registerWebMCPChallengeTools,
+  runPrerequisiteAwareWorkgroupComparison,
+  runWorkgroupComparisonPrerequisites,
 } from "../src/webmcp/challenge-tools.js";
 
 function lcg(seed) {
@@ -2189,6 +2196,29 @@ test("matched WG1 vs WG32 comparison aggregates samples and blocks high variabil
   assert.equal(comparison.executedProfilingAccounting.combined.totalCpuSpotChecks, 24);
   assert.ok(comparison.recommendationBlockers.some((blocker) => blocker.metric === "wg32.totalElapsedCv"));
   assert.ok(comparison.recommendationBlockers.some((blocker) => blocker.metric === "wg32.throughputCv"));
+  const webmcpStatus = buildWorkgroupComparisonStatus({
+    experiment: {
+      id: "webmcp-comparison-completed",
+      type: "matched_workgroup_comparison",
+      source: "webmcp",
+      status: "completed",
+      stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.completed,
+      plannedRepetitions: 3,
+      completedRepetitions: { total: 6, wg1: 3, wg32: 3 },
+      startedAt: "2026-07-19T17:59:00.000Z",
+      completedAt: "2026-07-19T18:00:00.000Z",
+      error: null,
+    },
+    statuses: createWorkgroupStatusMap(),
+    comparison,
+  });
+  assert.equal(webmcpStatus.state, "completed");
+  assert.equal(webmcpStatus.recommendation.classification, "host-side variability too high for a recommendation");
+  assert.equal(webmcpStatus.recommendation.recommendationAllowed, false);
+  assert.equal(webmcpStatus.recommendation.recommendation, null);
+  assert.deepEqual(webmcpStatus.recommendation.blockers, comparison.recommendationBlockers);
+  assert.equal(webmcpStatus.measurements.wg1.validRepetitionCount, 3);
+  assert.equal(webmcpStatus.measurements.wg32.validRepetitionCount, 3);
   assert.equal(comparison.boundaries.matchedWorkgroupComparison, true);
   assert.equal(comparison.boundaries.liveMining, false);
   assert.equal(comparison.boundaries.targetComparison, false);
@@ -2623,7 +2653,7 @@ test("guided matched workflow prepares WG1 and WG32 before manual comparison", (
   assert.match(html, /Repetitions per size/);
   assert.match(app, /workgroupRepetitions: 3/);
   assert.match(app, /matchedWorkgroupExecutionOrder\(\{ repetitions: state\.workgroupRepetitions \}\)/);
-  assert.match(app, /for \(const size of \[1, 32\]\)/);
+  assert.match(app, /runWorkgroupComparisonPrerequisites/);
   assert.match(app, /WG1 and WG32 are ready for matched comparison/);
   assert.doesNotMatch(app.slice(app.indexOf("async function prepareMatchedWorkgroups"), app.indexOf("async function runWorkgroupExperimentAction")), /matchedComparison/);
 });
@@ -3424,7 +3454,7 @@ test("Core PoW generator embeds the current Milestone 6 fixtures and avoids SHA-
   assert.doesNotMatch(generator, /CSHA256|CHash256|SerializeHash|HashWriter/);
 });
 
-test("WebMCP challenge tools expose three narrow user-goal schemas", async () => {
+test("WebMCP challenge tools expose four narrow user-goal schemas", async () => {
   const calls = [];
   const tools = createWebMCPChallengeTools({
     inspectComputeEnvironment: () => ({ inspected: true }),
@@ -3432,29 +3462,35 @@ test("WebMCP challenge tools expose three narrow user-goal schemas", async () =>
       calls.push(verificationLevel);
       return { verificationLevel };
     },
+    startWorkgroupComparison: () => ({ accepted: true, experimentId: "comparison-1" }),
     getExperimentStatus: () => ({ running: false }),
   });
   assert.deepEqual(tools.map((tool) => tool.name), [
     "inspect_compute_environment",
+    "start_workgroup_comparison",
     "verify_correctness",
     "get_experiment_status",
   ]);
   assert.deepEqual(tools[0].inputSchema, WEBMCP_TOOL_SCHEMAS.inspectComputeEnvironment);
-  assert.deepEqual(tools[1].inputSchema.properties.verification_level.enum, ["minimal", "full_294"]);
-  assert.deepEqual(tools[1].inputSchema.required, ["verification_level"]);
+  assert.deepEqual(tools[1].inputSchema, WEBMCP_TOOL_SCHEMAS.startWorkgroupComparison);
+  assert.deepEqual(tools[2].inputSchema.properties.verification_level.enum, ["minimal", "full_294"]);
+  assert.deepEqual(tools[2].inputSchema.required, ["verification_level"]);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   assert.equal(tools[1].annotations.readOnlyHint, false);
+  assert.equal(tools[2].annotations.readOnlyHint, false);
   assert.deepEqual(await tools[0].execute({}), { inspected: true });
-  assert.deepEqual(await tools[1].execute({ verification_level: "full_294" }), { verificationLevel: "full_294" });
-  assert.deepEqual(await tools[2].execute({}), { running: false });
+  assert.deepEqual(await tools[1].execute({}), { accepted: true, experimentId: "comparison-1" });
+  assert.deepEqual(await tools[2].execute({ verification_level: "full_294" }), { verificationLevel: "full_294" });
+  assert.deepEqual(await tools[3].execute({}), { running: false });
   assert.deepEqual(calls, ["full_294"]);
-  assert.throws(() => tools[1].execute({ verification_level: "profiling" }), /Unsupported verification_level/);
+  assert.throws(() => tools[2].execute({ verification_level: "profiling" }), /Unsupported verification_level/);
 });
 
 test("WebMCP registration is optional and cleans up a partial registration failure", async () => {
   const handlers = {
     inspectComputeEnvironment: () => ({}),
     verifyCorrectness: () => ({}),
+    startWorkgroupComparison: () => ({}),
     getExperimentStatus: () => ({}),
   };
   const unavailable = await registerWebMCPChallengeTools({ modelContext: null, handlers });
@@ -3472,7 +3508,7 @@ test("WebMCP registration is optional and cleans up a partial registration failu
     handlers,
   });
   assert.equal(available.status, "registered");
-  assert.deepEqual(registered, ["inspect_compute_environment", "verify_correctness", "get_experiment_status"]);
+  assert.deepEqual(registered, ["inspect_compute_environment", "start_workgroup_comparison", "verify_correctness", "get_experiment_status"]);
 
   let firstSignal;
   let registrationAttempts = 0;
@@ -3520,6 +3556,106 @@ test("WebMCP environment and status inspection never imply background computatio
   });
   assert.equal(status.mostRecent.status, "completed");
   assert.equal(status.correctnessVerification.success, true);
+});
+
+test("WebMCP workgroup start acknowledgement is asynchronous and refuses conflicts", () => {
+  const experiment = {
+    id: "webmcp-comparison-1",
+    status: "running",
+    stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.queued,
+    plannedRepetitions: WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
+  };
+  const accepted = admitWorkgroupComparisonStart({ running: false, experiment });
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.state, "running");
+  assert.equal(accepted.stage, "queued");
+  assert.equal(accepted.plannedRepetitions, 3);
+  assert.match(accepted.message, /Poll get_experiment_status/);
+
+  const blocked = admitWorkgroupComparisonStart({
+    running: true,
+    currentExperiment: { type: "correctness_verification", status: "running" },
+  });
+  assert.equal(blocked.accepted, false);
+  assert.equal(blocked.state, "blocked");
+  assert.equal(blocked.experimentId, null);
+  assert.equal(blocked.conflictingExperiment.type, "correctness_verification");
+});
+
+test("WebMCP workgroup orchestration reuses passed prerequisites and sequences existing actions", async () => {
+  const progress = {
+    1: { compilePassed: true, smallGatePassed: false, full294Passed: false },
+    32: { compilePassed: false, smallGatePassed: false, full294Passed: false },
+  };
+  const actions = [];
+  const stages = [];
+  await runWorkgroupComparisonPrerequisites({
+    readPrerequisites: (size) => progress[size],
+    runPrerequisite: async (step) => {
+      actions.push(`${step.size}:${step.action}`);
+      progress[step.size][step.key] = true;
+    },
+    onStage: (stage) => stages.push(stage),
+  });
+  assert.deepEqual(actions, [
+    "1:small-correctness-gate",
+    "1:full-294-vector-verification",
+    "32:compile-selected-variant",
+    "32:small-correctness-gate",
+    "32:full-294-vector-verification",
+  ]);
+  assert.deepEqual(stages, [
+    "wg1_small_gate",
+    "wg1_full_294",
+    "wg32_compile",
+    "wg32_small_gate",
+    "wg32_full_294",
+  ]);
+});
+
+test("WebMCP workgroup orchestration cannot bypass a failed correctness prerequisite", async () => {
+  const progress = {
+    1: { compilePassed: false, smallGatePassed: false, full294Passed: false },
+    32: { compilePassed: false, smallGatePassed: false, full294Passed: false },
+  };
+  let matchedComparisonStarted = false;
+  await assert.rejects(runPrerequisiteAwareWorkgroupComparison({
+    readPrerequisites: (size) => progress[size],
+    runPrerequisite: async (step) => {
+      if (step.key === "compilePassed") progress[step.size][step.key] = true;
+    },
+    runMatchedComparison: async () => {
+      matchedComparisonStarted = true;
+    },
+  }), /WG1 prerequisite failed at wg1_small_gate/);
+  assert.equal(matchedComparisonStarted, false);
+});
+
+test("WebMCP workgroup progress is machine-readable before a comparison completes", () => {
+  const status = buildWorkgroupComparisonStatus({
+    experiment: {
+      id: "webmcp-comparison-2",
+      type: "matched_workgroup_comparison",
+      source: "webmcp",
+      status: "running",
+      stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.matchedComparison,
+      plannedRepetitions: 3,
+      completedRepetitions: { total: 2, wg1: 1, wg32: 1 },
+      startedAt: "2026-08-29T20:00:00.000Z",
+    },
+    statuses: {
+      1: { deviceSupport: "supported", pipeline: "compiled", smallGate: "passed", full294: "passed", currentSessionFull294Passed: true, full294Matches: 294, full294Mismatches: 0 },
+      32: { deviceSupport: "supported", pipeline: "compiled", smallGate: "passed", full294: "passed", currentSessionFull294Passed: true, full294Matches: 294, full294Mismatches: 0 },
+    },
+    currentAction: { status: "running", startedActionType: WORKGROUP_EXPERIMENT_ACTIONS.matchedComparison },
+  });
+  assert.equal(status.running, true);
+  assert.equal(status.stage, "matched_comparison");
+  assert.deepEqual(status.completedRepetitions, { total: 2, wg1: 1, wg32: 1 });
+  assert.equal(status.prerequisites.wg1.full294Passed, true);
+  assert.equal(status.prerequisites.wg32.full294Matches, 294);
+  assert.equal(status.measurements, null);
+  assert.equal(status.boundaries.liveMining, false);
 });
 
 test("WebMCP correctness result accepts only complete Core-identical verification", () => {
@@ -3581,5 +3717,25 @@ test("WebMCP app adapter reuses the visible minimal Whirlpool workflow", () => {
   assert.match(app, /await runWhirlpoolMinimalProof\(\{ invocationSource: "webmcp" \}\)/);
   assert.match(app, /runWebGPUWhirlpoolFixtureSuite/);
   assert.match(app, /renderBenchmark\(\)/);
+  assert.match(app, /Full 294-vector pass; 294 \/ 294 selected matches, 0 mismatches/);
   assert.doesNotMatch(integration, /navigator\.gpu|requestAdapter|runWebGPUWhirlpoolFixtureSuite|createComputePipeline/);
+});
+
+test("WebMCP workgroup adapter starts asynchronously through the existing visible experiment path", () => {
+  const app = readFileSync(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const start = app.slice(
+    app.indexOf("function startWorkgroupComparisonForWebMCP"),
+    app.indexOf("function wgslPresetWarning"),
+  );
+  const execution = app.slice(
+    app.indexOf("async function executeWebMCPWorkgroupComparison"),
+    app.indexOf("function startWorkgroupComparisonForWebMCP"),
+  );
+  assert.match(start, /Promise\.resolve\(\)\.then\(\(\) => executeWebMCPWorkgroupComparison/);
+  assert.match(execution, /runPrerequisiteAwareWorkgroupComparison/);
+  assert.match(execution, /runWorkgroupExperimentAction\(action, \{ orchestrationId: experimentId \}\)/);
+  assert.match(execution, /WORKGROUP_EXPERIMENT_ACTIONS\.matchedComparison/);
+  assert.match(app, /runWorkgroupComparisonPrerequisites/);
+  assert.match(app, /state\.workgroupMatchedComparison/);
+  assert.doesNotMatch(execution, /runWorkgroupCompileGate|runWorkgroupSmallGate|runWorkgroupFullVerification|runWorkgroupSyntheticProfiling|buildMatchedWorkgroupComparison/);
 });

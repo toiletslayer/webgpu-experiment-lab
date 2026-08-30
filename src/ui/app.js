@@ -94,10 +94,17 @@ import {
 } from "../webgpu/workgroup-experiment.js";
 import {
   WEBMCP_VERIFICATION_LEVELS,
+  WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
+  WEBMCP_WORKGROUP_COMPARISON_STAGES,
+  admitWorkgroupComparisonStart,
   buildComputeEnvironmentResult,
   buildExperimentStatusResult,
+  buildStartWorkgroupComparisonResult,
   buildVerificationResult,
+  buildWorkgroupComparisonStatus,
   registerWebMCPChallengeTools,
+  runPrerequisiteAwareWorkgroupComparison,
+  runWorkgroupComparisonPrerequisites,
 } from "../webmcp/challenge-tools.js";
 
 const PROJECT_VERSION = "0.1.0";
@@ -168,6 +175,8 @@ const state = {
     completedAt: null,
     error: null,
   },
+  workgroupComparisonExperiment: null,
+  workgroupComparisonExperimentCounter: 0,
   activeStandaloneExperiment: null,
   webmcpRegistration: null,
   animationFrame: 0,
@@ -359,6 +368,10 @@ function setTestType(type) {
 }
 
 function resetCurrentBrowserTestSession() {
+  if (isExperimentRunning()) {
+    setStatus("An experiment is running; reset is available after the current safe workflow boundary completes", "bad");
+    return;
+  }
   state.benchmark = createBenchmarkState();
   state.plumbingResult = null;
   state.whirlpoolResult = null;
@@ -393,6 +406,7 @@ function resetCurrentBrowserTestSession() {
     completedAt: null,
     error: null,
   };
+  state.workgroupComparisonExperiment = null;
   state.guidedProgress = "Not running.";
   state.matchedProgress = "Not running.";
   renderBenchmark();
@@ -476,7 +490,13 @@ function compactResultSummary() {
     return `Synthetic benchmark completed\n\nCorrectness: passed\nHashes returned: ${formatIntegerSafe(state.syntheticResult.returnedResultCount ?? state.syntheticResult.resultCount)}\nMismatches: ${formatIntegerSafe(state.syntheticResult.mismatchesAgainstCpuReference)}\nThroughput: ${formatRateSafe(state.syntheticResult.verifiedHashesPerSecondIncludingPipeline)}`;
   }
   if (state.whirlpoolResult?.resultCount > 0) {
-    return `Correctness verification completed\n\nResults returned: ${formatIntegerSafe(state.whirlpoolResult.resultCount)}\nMismatches: ${formatIntegerSafe(state.whirlpoolResult.mismatchesAgainstCpuReference)}\nStatus: ${state.whirlpoolResult.wgslCoreStatus || state.whirlpoolResult.shaderStatus}`;
+    const fullVectorPassed = state.coreWgslComparison?.selectedVectorCount === 294 &&
+      state.coreWgslComparison?.matches === 294 &&
+      state.coreWgslComparison?.mismatches?.length === 0;
+    const correctnessStatus = fullVectorPassed
+      ? "Full 294-vector pass; 294 / 294 selected matches, 0 mismatches"
+      : state.whirlpoolResult.wgslCoreStatus || state.whirlpoolResult.shaderStatus;
+    return `Correctness verification completed\n\nResults returned: ${formatIntegerSafe(state.whirlpoolResult.resultCount)}\nMismatches: ${formatIntegerSafe(state.whirlpoolResult.mismatchesAgainstCpuReference)}\nStatus: ${correctnessStatus}`;
   }
   return "No guided action has completed yet.";
 }
@@ -501,6 +521,7 @@ function renderWorkflowShell() {
   els.recommendedNextReason.textContent = next.reason;
   els.compactResultSummary.textContent = compactResultSummary();
   els.runRecommendedAction.disabled = isExperimentRunning();
+  els.resetBrowserTestSession.disabled = isExperimentRunning();
 }
 
 function firstPipelineDiagnostics() {
@@ -520,10 +541,20 @@ function isExperimentRunning() {
   return state.benchmark.running
     || state.activeWorkgroupActionRunId !== null
     || state.activeStandaloneExperiment !== null
-    || state.correctnessExperiment.status === "running";
+    || state.correctnessExperiment.status === "running"
+    || state.workgroupComparisonExperiment?.status === "running";
 }
 
 function currentExperimentSummary() {
+  if (state.workgroupComparisonExperiment?.status === "running") {
+    return {
+      type: state.workgroupComparisonExperiment.type,
+      source: state.workgroupComparisonExperiment.source,
+      experimentId: state.workgroupComparisonExperiment.id,
+      stage: state.workgroupComparisonExperiment.stage,
+      startedAt: state.workgroupComparisonExperiment.startedAt,
+    };
+  }
   if (state.correctnessExperiment.status === "running") {
     return {
       type: "correctness_verification",
@@ -556,6 +587,18 @@ function currentExperimentSummary() {
 
 function mostRecentExperimentSummary() {
   const candidates = [];
+  if (state.workgroupComparisonExperiment) {
+    candidates.push({
+      type: state.workgroupComparisonExperiment.type,
+      status: state.workgroupComparisonExperiment.status,
+      source: state.workgroupComparisonExperiment.source,
+      experimentId: state.workgroupComparisonExperiment.id,
+      stage: state.workgroupComparisonExperiment.stage,
+      startedAt: state.workgroupComparisonExperiment.startedAt,
+      completedAt: state.workgroupComparisonExperiment.completedAt,
+      error: state.workgroupComparisonExperiment.error,
+    });
+  }
   if (state.correctnessExperiment.status !== "not_run") {
     candidates.push({
       type: "correctness_verification",
@@ -658,7 +701,130 @@ function getExperimentStatusForWebMCP() {
     current: currentExperimentSummary(),
     mostRecent: mostRecentExperimentSummary(),
     verificationResult: buildSharedVerificationResult(),
+    workgroupComparisonResult: buildWorkgroupComparisonStatus({
+      experiment: state.workgroupComparisonExperiment,
+      statuses: state.workgroupStatuses,
+      currentAction: state.workgroupCurrentAction,
+      comparison: state.workgroupMatchedComparison,
+    }),
   });
+}
+
+function updateWebMCPWorkgroupComparison(patch) {
+  if (!state.workgroupComparisonExperiment) return;
+  state.workgroupComparisonExperiment = {
+    ...state.workgroupComparisonExperiment,
+    ...patch,
+  };
+  renderBenchmark();
+}
+
+function workgroupPrerequisiteSnapshot(size) {
+  const steps = workgroupStepState(size);
+  return {
+    compilePassed: steps.compiled,
+    smallGatePassed: steps.smallGate,
+    full294Passed: steps.full294,
+  };
+}
+
+async function executeWebMCPWorkgroupComparison(experimentId) {
+  try {
+    const comparison = await runPrerequisiteAwareWorkgroupComparison({
+      readPrerequisites: workgroupPrerequisiteSnapshot,
+      runPrerequisite: async ({ size, action }) => {
+        state.workgroupSize = size;
+        els.workgroupSizeSelect.value = String(size);
+        const result = await runWorkgroupExperimentAction(action, { orchestrationId: experimentId });
+        if (!result) throw new Error(`WG${size} ${action} did not complete`);
+      },
+      runMatchedComparison: async () => {
+        const result = await runWorkgroupExperimentAction(WORKGROUP_EXPERIMENT_ACTIONS.matchedComparison, {
+          orchestrationId: experimentId,
+          onProgress(progress) {
+            updateWebMCPWorkgroupComparison({
+              stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.matchedComparison,
+              completedRepetitions: {
+                total: progress.completedSamples || 0,
+                wg1: progress.completedBySize?.[1] || 0,
+                wg32: progress.completedBySize?.[32] || 0,
+              },
+            });
+          },
+        });
+        if (!result?.matchedComparison) throw new Error("Matched WG1-vs-WG32 comparison did not return a result");
+        return result.matchedComparison;
+      },
+      onStage(stage) {
+        updateWebMCPWorkgroupComparison({ stage });
+      },
+    });
+    if (!comparison?.matchedComparisonStatus?.valid) {
+      throw new Error("Matched WG1-vs-WG32 comparison completed without valid correctness-gated evidence");
+    }
+    updateWebMCPWorkgroupComparison({
+      status: "completed",
+      stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.completed,
+      completedAt: new Date().toISOString(),
+      completedRepetitions: {
+        total: comparison.samples?.length || 0,
+        wg1: comparison.aggregate?.[1]?.validRepetitionCount || 0,
+        wg32: comparison.aggregate?.[32]?.validRepetitionCount || 0,
+      },
+      error: null,
+    });
+    disableWorkgroupActionControls(false);
+  } catch (error) {
+    updateWebMCPWorkgroupComparison({
+      status: "failed",
+      stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.failed,
+      completedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    setStatus(error instanceof Error ? error.message : String(error), "bad");
+    disableWorkgroupActionControls(false);
+  }
+}
+
+function startWorkgroupComparisonForWebMCP({ signal } = {}) {
+  if (signal?.aborted) throw signal.reason;
+  const conflict = currentExperimentSummary();
+  if (isExperimentRunning()) {
+    return admitWorkgroupComparisonStart({ running: true, currentExperiment: conflict });
+  }
+  if (!state.capabilities?.supported) {
+    return buildStartWorkgroupComparisonResult({
+      experiment: null,
+      conflict: { type: "environment", error: state.capabilities?.error || "WebGPU unavailable" },
+      reason: "WebGPU is unavailable; the comparison was not started.",
+    });
+  }
+  setTestType(TEST_TYPES.matched);
+  state.workgroupRepetitions = WEBMCP_WORKGROUP_COMPARISON_REPETITIONS;
+  els.workgroupRepetitionSelect.value = String(WEBMCP_WORKGROUP_COMPARISON_REPETITIONS);
+  els.guidedMatchedRepetitions.value = String(WEBMCP_WORKGROUP_COMPARISON_REPETITIONS);
+  state.workgroupComparisonExperimentCounter += 1;
+  const startedAt = new Date().toISOString();
+  const experiment = {
+    id: `webmcp-wg1-vs-wg32-${state.workgroupComparisonExperimentCounter}-${startedAt}`,
+    type: "matched_workgroup_comparison",
+    source: "webmcp",
+    status: "running",
+    stage: WEBMCP_WORKGROUP_COMPARISON_STAGES.queued,
+    plannedRepetitions: WEBMCP_WORKGROUP_COMPARISON_REPETITIONS,
+    completedRepetitions: { total: 0, wg1: 0, wg32: 0 },
+    startedAt,
+    completedAt: null,
+    error: null,
+  };
+  state.workgroupComparisonExperiment = experiment;
+  state.workgroupMatchedComparison = null;
+  state.workgroupMatchedComparisonExport = null;
+  state.matchedProgress = "WebMCP comparison queued; preparing WG1 and WG32 prerequisites.";
+  disableWorkgroupActionControls(true);
+  renderBenchmark();
+  Promise.resolve().then(() => executeWebMCPWorkgroupComparison(experiment.id));
+  return admitWorkgroupComparisonStart({ running: false, experiment });
 }
 
 function wgslPresetWarning(preset = selectedWgslPreset()) {
@@ -1502,12 +1668,13 @@ function setBenchmarkFromWorkgroupResult(result) {
 }
 
 function disableWorkgroupActionControls(disabled) {
-  els.start.disabled = disabled;
-  if (els.compileWorkgroupVariant) els.compileWorkgroupVariant.disabled = disabled;
-  if (els.runWorkgroupSmallGate) els.runWorkgroupSmallGate.disabled = disabled;
-  if (els.runWorkgroupFull294) els.runWorkgroupFull294.disabled = disabled;
+  const locked = disabled || state.workgroupComparisonExperiment?.status === "running";
+  els.start.disabled = locked;
+  if (els.compileWorkgroupVariant) els.compileWorkgroupVariant.disabled = locked;
+  if (els.runWorkgroupSmallGate) els.runWorkgroupSmallGate.disabled = locked;
+  if (els.runWorkgroupFull294) els.runWorkgroupFull294.disabled = locked;
   if (els.runWorkgroupPerformance) {
-    els.runWorkgroupPerformance.disabled = disabled || !workgroupPerformanceActionAvailable(state.workgroupStatuses[state.workgroupSize] || {});
+    els.runWorkgroupPerformance.disabled = locked || !workgroupPerformanceActionAvailable(state.workgroupStatuses[state.workgroupSize] || {});
   }
   if (els.runMatchedWorkgroupComparison) {
     const prerequisites = matchedWorkgroupComparisonPrerequisites({
@@ -1515,7 +1682,7 @@ function disableWorkgroupActionControls(disabled) {
       repetitions: state.workgroupRepetitions,
       deviceLimits: state.capabilities?.limits || {},
     });
-    els.runMatchedWorkgroupComparison.disabled = disabled || !prerequisites.available;
+    els.runMatchedWorkgroupComparison.disabled = locked || !prerequisites.available;
   }
   for (const id of [
     "guidedCompileWorkgroup",
@@ -1527,8 +1694,9 @@ function disableWorkgroupActionControls(disabled) {
     "prepareMatchedWorkgroups",
     "runRecommendedAction",
   ]) {
-    if (els[id]) els[id].disabled = disabled;
+    if (els[id]) els[id].disabled = locked;
   }
+  if (els.resetBrowserTestSession) els.resetBrowserTestSession.disabled = locked;
   els.stop.disabled = true;
 }
 
@@ -1605,43 +1773,52 @@ async function runRecommendedCorrectnessSequence(size = state.workgroupSize) {
 async function prepareMatchedWorkgroups(event) {
   prepareWorkgroupActionEvent(event);
   const originalSize = state.workgroupSize;
-  for (const size of [1, 32]) {
-    state.workgroupSize = size;
-    els.workgroupSizeSelect.value = String(size);
-    state.matchedProgress = `Preparing WG${size}: compile...`;
-    renderBenchmark();
-    await runWorkgroupExperimentAction(WORKGROUP_EXPERIMENT_ACTIONS.compile);
-    if (!workgroupStepState(size).compiled) break;
-    state.matchedProgress = `Preparing WG${size}: small correctness gate...`;
-    renderBenchmark();
-    await runWorkgroupExperimentAction(WORKGROUP_EXPERIMENT_ACTIONS.smallGate);
-    if (!workgroupStepState(size).smallGate) break;
-    state.matchedProgress = `Preparing WG${size}: full 294-vector verification...`;
-    renderBenchmark();
-    await runWorkgroupExperimentAction(WORKGROUP_EXPERIMENT_ACTIONS.full294);
-    if (!workgroupStepState(size).full294) break;
+  try {
+    await runWorkgroupComparisonPrerequisites({
+      readPrerequisites: workgroupPrerequisiteSnapshot,
+      runPrerequisite: async ({ size, action }) => {
+        state.workgroupSize = size;
+        els.workgroupSizeSelect.value = String(size);
+        const result = await runWorkgroupExperimentAction(action);
+        if (!result) throw new Error(`WG${size} ${action} did not complete`);
+      },
+      onStage(stage, detail) {
+        state.matchedProgress = `Preparing WG${detail.workgroupSize}: ${stage.replaceAll("_", " ")}...`;
+        renderBenchmark();
+      },
+    });
+  } catch (error) {
+    state.matchedProgress = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.workgroupSize = originalSize;
+    els.workgroupSizeSelect.value = String(originalSize);
   }
-  state.workgroupSize = originalSize;
-  els.workgroupSizeSelect.value = String(originalSize);
   state.matchedProgress = matchedPrerequisitesReady()
     ? "WG1 and WG32 are ready for matched comparison."
     : "Preparation stopped before all prerequisites passed. Check the failed step above.";
   renderBenchmark();
 }
 
-async function runWorkgroupExperimentAction(requestedActionType) {
+async function runWorkgroupExperimentAction(requestedActionType, { orchestrationId = null, onProgress = null } = {}) {
   const action = normalizeWorkgroupExperimentAction(requestedActionType);
   if (!state.capabilities?.supported) {
     setStatus("WebGPU is unavailable; workgroup-size experiment cannot run", "bad");
     return;
   }
+  const activeOrchestrationId = state.workgroupComparisonExperiment?.status === "running"
+    ? state.workgroupComparisonExperiment.id
+    : null;
+  if (activeOrchestrationId && orchestrationId !== activeOrchestrationId) {
+    setStatus("Another experiment is already running", "bad");
+    return null;
+  }
   if (state.correctnessExperiment.status === "running" || state.activeStandaloneExperiment || state.benchmark.running) {
     setStatus("Another experiment is already running", "bad");
-    return;
+    return null;
   }
   if (state.activeWorkgroupActionRunId !== null) {
     setStatus("Another workgroup experiment action is already running", "bad");
-    return;
+    return null;
   }
 
   const runId = state.workgroupActionRunId + 1;
@@ -1803,7 +1980,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
       for (const step of executionOrder) {
         if (state.activeWorkgroupActionRunId !== runId) {
           setStatus("Stale matched workgroup comparison discarded", "neutral");
-          return;
+          return null;
         }
         const pipelineKey = whirlpoolPipelineKey(step.workgroupSize);
         setStatus(`Matched comparison order ${step.executionOrderIndex + 1} / ${executionOrder.length}: WG${step.workgroupSize} ${pipelineKey} repetition ${step.repetitionIndex}`, "good");
@@ -1827,6 +2004,15 @@ async function runWorkgroupExperimentAction(requestedActionType) {
           full294Passed: state.workgroupStatuses[step.workgroupSize]?.currentSessionFull294Passed === true,
         });
         samples.push(sample);
+        onProgress?.({
+          completedSamples: samples.length,
+          plannedSamples: executionOrder.length,
+          completedBySize: {
+            1: samples.filter((entry) => entry.workgroupSize === 1).length,
+            32: samples.filter((entry) => entry.workgroupSize === 32).length,
+          },
+          lastSample: sample,
+        });
         state.workgroupProfileHistoryBySize[step.workgroupSize] = [
           ...(state.workgroupProfileHistoryBySize[step.workgroupSize] || []),
           sample,
@@ -1873,7 +2059,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
     }
     if (state.activeWorkgroupActionRunId !== runId) {
       setStatus("Stale workgroup action result discarded", "neutral");
-      return;
+      return null;
     }
     const completedTelemetry = completeWorkgroupActionTelemetry(actionTelemetry, result.actionType || action, { runId });
     result = {
@@ -1910,7 +2096,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
     };
     const renderCompleted = renderBenchmarkForWorkgroupAction(result);
     if (!renderCompleted) {
-      return;
+      return result;
     }
     if (action === WORKGROUP_EXPERIMENT_ACTIONS.compile) {
       setStatus(`Workgroup ${state.workgroupSize} pipeline ${result.compileGate}`, result.compileGate === "compiled" ? "good" : "bad");
@@ -1941,6 +2127,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
         result.smallGate.passed ? "good" : "bad",
       );
     }
+    return result;
   } catch (error) {
     if (state.activeWorkgroupActionRunId !== runId) {
       setStatus("Stale workgroup action failure discarded", "neutral");
@@ -1966,7 +2153,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
       state.workgroupMatchedComparison = state.workgroupResult.matchedComparison;
       state.workgroupMatchedComparisonExport = state.workgroupResult.matchedComparison;
       setStatus(state.workgroupResult.renderStatus.message, "bad");
-      return;
+      return state.workgroupResult;
     }
     const failedTelemetry = completeWorkgroupActionTelemetry(actionTelemetry, action, { runId });
     state.workgroupResult = {
@@ -2008,6 +2195,7 @@ async function runWorkgroupExperimentAction(requestedActionType) {
     }
     renderBenchmark();
     setStatus(error instanceof Error ? error.message : String(error), "bad");
+    return null;
   } finally {
     if (state.activeWorkgroupActionRunId === runId) {
       state.activeWorkgroupActionRunId = null;
@@ -2877,6 +3065,7 @@ export async function main() {
     handlers: {
       inspectComputeEnvironment: inspectComputeEnvironmentForWebMCP,
       verifyCorrectness: verifyCorrectnessForWebMCP,
+      startWorkgroupComparison: startWorkgroupComparisonForWebMCP,
       getExperimentStatus: getExperimentStatusForWebMCP,
     },
   });
