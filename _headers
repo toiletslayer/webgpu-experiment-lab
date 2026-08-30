@@ -4,7 +4,4 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: tools=(self)
-
-# Add the final WebMCP origin-trial token as an Origin-Trial response header
-# only after registering the exact production HTTPS origin. No token is stored
-# in this repository yet.
+  Origin-Trial: Asw7TpNjGLn2aw4MGMFN6AMg5168pI06niUpfFupN6Mw5h9WpACXMiDfiQfmQWjF0kT4/VrjAvU/115kZczbDQQAAABfeyJvcmlnaW4iOiJodHRwczovL3dlYmdwdS1leHBlcmltZW50LWxhYi5wYWdlcy5kZXY6NDQzIiwiZmVhdHVyZSI6IldlYk1DUCIsImV4cGlyeSI6MTc5NDg3MzYwMH0=
