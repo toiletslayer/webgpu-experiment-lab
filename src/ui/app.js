@@ -21,6 +21,7 @@ import { formatPipelineTimingView } from "./pipeline-timing.js";
 import {
   DEFAULT_WGSL_BATCH_SIZE,
   DEFAULT_WGSL_CORE_VERIFICATION_SUBSET,
+  FULL_CORE_VECTOR_VERIFICATION_PRESET,
   WGSL_BATCH_SIZE_OPTIONS,
   WGSL_CORE_VERIFICATION_PRESETS,
   runWebGPUWhirlpoolFixtureSuite,
@@ -91,6 +92,13 @@ import {
   workgroupPerformanceEligible,
   summarizeWorkgroupProfilingResult,
 } from "../webgpu/workgroup-experiment.js";
+import {
+  WEBMCP_VERIFICATION_LEVELS,
+  buildComputeEnvironmentResult,
+  buildExperimentStatusResult,
+  buildVerificationResult,
+  registerWebMCPChallengeTools,
+} from "../webmcp/challenge-tools.js";
 
 const PROJECT_VERSION = "0.1.0";
 const UI_MODES = Object.freeze({ guided: "guided", advanced: "advanced" });
@@ -151,6 +159,17 @@ const state = {
   coreVectorSummary: null,
   coreCpuComparison: null,
   coreWgslComparison: null,
+  correctnessExperiment: {
+    status: "not_run",
+    source: null,
+    verificationLevel: null,
+    presetId: null,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+  },
+  activeStandaloneExperiment: null,
+  webmcpRegistration: null,
   animationFrame: 0,
 };
 
@@ -365,6 +384,15 @@ function resetCurrentBrowserTestSession() {
   state.workgroupMatchedComparison = null;
   state.workgroupMatchedComparisonExport = null;
   state.coreWgslComparison = null;
+  state.correctnessExperiment = {
+    status: "not_run",
+    source: null,
+    verificationLevel: null,
+    presetId: null,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+  };
   state.guidedProgress = "Not running.";
   state.matchedProgress = "Not running.";
   renderBenchmark();
@@ -472,7 +500,7 @@ function renderWorkflowShell() {
   els.recommendedNextAction.textContent = next.label;
   els.recommendedNextReason.textContent = next.reason;
   els.compactResultSummary.textContent = compactResultSummary();
-  els.runRecommendedAction.disabled = Boolean(state.activeWorkgroupActionRunId || state.benchmark.running);
+  els.runRecommendedAction.disabled = isExperimentRunning();
 }
 
 function firstPipelineDiagnostics() {
@@ -486,6 +514,151 @@ function firstPipelineDiagnostics() {
 
 function selectedWgslPreset() {
   return verificationPresetById(state.wgslPresetId);
+}
+
+function isExperimentRunning() {
+  return state.benchmark.running
+    || state.activeWorkgroupActionRunId !== null
+    || state.activeStandaloneExperiment !== null
+    || state.correctnessExperiment.status === "running";
+}
+
+function currentExperimentSummary() {
+  if (state.correctnessExperiment.status === "running") {
+    return {
+      type: "correctness_verification",
+      source: state.correctnessExperiment.source,
+      verificationLevel: state.correctnessExperiment.verificationLevel,
+      presetId: state.correctnessExperiment.presetId,
+      startedAt: state.correctnessExperiment.startedAt,
+    };
+  }
+  if (state.activeWorkgroupActionRunId !== null) {
+    return {
+      type: "workgroup_experiment",
+      action: state.workgroupCurrentAction?.startedActionType || state.workgroupCurrentAction?.requestedActionType || null,
+      runId: state.activeWorkgroupActionRunId,
+      workgroupSize: state.workgroupSize,
+    };
+  }
+  if (state.activeStandaloneExperiment) {
+    return { ...state.activeStandaloneExperiment };
+  }
+  if (state.benchmark.running) {
+    return {
+      type: "benchmark",
+      executionMode: state.executionMode,
+      startedAt: state.benchmark.startTime || null,
+    };
+  }
+  return null;
+}
+
+function mostRecentExperimentSummary() {
+  const candidates = [];
+  if (state.correctnessExperiment.status !== "not_run") {
+    candidates.push({
+      type: "correctness_verification",
+      status: state.correctnessExperiment.status,
+      source: state.correctnessExperiment.source,
+      verificationLevel: state.correctnessExperiment.verificationLevel,
+      presetId: state.correctnessExperiment.presetId,
+      startedAt: state.correctnessExperiment.startedAt,
+      completedAt: state.correctnessExperiment.completedAt,
+      error: state.correctnessExperiment.error,
+    });
+  }
+  if (state.workgroupLastCompletedAction) {
+    candidates.push({
+      type: "workgroup_experiment",
+      status: state.workgroupCurrentAction?.status || "completed",
+      action: state.workgroupLastCompletedAction.completedActionType,
+      runId: state.workgroupLastCompletedAction.workgroupActionRunId,
+      workgroupSize: state.workgroupResult?.workgroupSize || state.workgroupSize,
+      startedAt: state.workgroupLastCompletedAction.actionStartTimestamp || null,
+      completedAt: state.workgroupLastCompletedAction.actionCompletionTimestamp || null,
+    });
+  }
+  return candidates.sort((left, right) => String(right.completedAt || right.startedAt || "").localeCompare(String(left.completedAt || left.startedAt || "")))[0] || null;
+}
+
+function verificationLevelForPreset(preset = selectedWgslPreset()) {
+  return preset.fullVector ? WEBMCP_VERIFICATION_LEVELS.full294 : WEBMCP_VERIFICATION_LEVELS.minimal;
+}
+
+function buildSharedVerificationResult() {
+  if (state.correctnessExperiment.status === "not_run") return null;
+  const preset = verificationPresetById(state.correctnessExperiment.presetId || state.wgslPresetId);
+  return buildVerificationResult({
+    verificationLevel: state.correctnessExperiment.verificationLevel || verificationLevelForPreset(preset),
+    preset,
+    experiment: state.correctnessExperiment,
+    result: state.whirlpoolResult,
+    coreComparison: state.coreWgslComparison,
+  });
+}
+
+function configureWebMCPVerification(verificationLevel) {
+  const preset = verificationLevel === WEBMCP_VERIFICATION_LEVELS.full294
+    ? FULL_CORE_VECTOR_VERIFICATION_PRESET
+    : DEFAULT_WGSL_CORE_VERIFICATION_SUBSET;
+  setTestType(TEST_TYPES.correctness);
+  state.wgslPresetId = preset.id;
+  state.wgslBatchSize = DEFAULT_WGSL_BATCH_SIZE;
+  state.workgroupSize = DEFAULT_EXPERIMENT_WORKGROUP_SIZE;
+  els.wgslPresetSelect.value = preset.id;
+  els.wgslBatchSizeSelect.value = String(DEFAULT_WGSL_BATCH_SIZE);
+  els.workgroupSizeSelect.value = String(DEFAULT_EXPERIMENT_WORKGROUP_SIZE);
+  els.wgslPresetWarning.textContent = wgslPresetWarning(preset);
+  state.whirlpoolResult = null;
+  state.whirlpoolProgress = null;
+  state.coreWgslComparison = null;
+  renderBenchmark();
+  return preset;
+}
+
+function inspectComputeEnvironmentForWebMCP() {
+  return buildComputeEnvironmentResult({
+    capabilities: state.capabilities,
+    userAgent: navigator.userAgent,
+    verificationPresets: WGSL_CORE_VERIFICATION_PRESETS,
+    batchSizes: WGSL_BATCH_SIZE_OPTIONS,
+    workgroupSizes: WORKGROUP_SIZE_OPTIONS,
+    running: isExperimentRunning(),
+    currentExperiment: currentExperimentSummary(),
+  });
+}
+
+async function verifyCorrectnessForWebMCP({ verificationLevel, signal }) {
+  if (signal?.aborted) throw signal.reason;
+  if (isExperimentRunning()) {
+    return buildVerificationResult({
+      verificationLevel,
+      preset: verificationLevel === WEBMCP_VERIFICATION_LEVELS.full294
+        ? FULL_CORE_VECTOR_VERIFICATION_PRESET
+        : DEFAULT_WGSL_CORE_VERIFICATION_SUBSET,
+      experiment: {
+        status: "blocked",
+        source: "webmcp",
+        error: "Another experiment is already running.",
+      },
+      result: null,
+      coreComparison: null,
+    });
+  }
+  configureWebMCPVerification(verificationLevel);
+  await runWhirlpoolMinimalProof({ invocationSource: "webmcp" });
+  if (signal?.aborted) throw signal.reason;
+  return buildSharedVerificationResult();
+}
+
+function getExperimentStatusForWebMCP() {
+  return buildExperimentStatusResult({
+    running: isExperimentRunning(),
+    current: currentExperimentSummary(),
+    mostRecent: mostRecentExperimentSummary(),
+    verificationResult: buildSharedVerificationResult(),
+  });
 }
 
 function wgslPresetWarning(preset = selectedWgslPreset()) {
@@ -1008,6 +1181,7 @@ function formatMaybeStat(stats, key = "mean") {
 }
 
 function renderWorkgroupExperiment() {
+  const experimentBusy = isExperimentRunning();
   const plannedAccounting = workgroupExperimentInvocationAccounting({ workgroupSize: state.workgroupSize });
   const displayAccounting = workgroupDisplayAccounting(plannedAccounting);
   els.workgroupReference.textContent = "1";
@@ -1048,11 +1222,11 @@ function renderWorkgroupExperiment() {
   els.workgroupPerformanceEligibility.textContent = workgroupPerformanceActionAvailable(selectedStatus)
     ? "Performance profile action available; accepted performance still requires a valid profiling run"
     : "Locked; run full 294 WGSL/Core verification for this selected size first";
-  els.guidedRunSmallGate.disabled = !selectedSteps.compiled || Boolean(state.activeWorkgroupActionRunId);
-  els.guidedRunFull294.disabled = !selectedSteps.smallGate || Boolean(state.activeWorkgroupActionRunId);
-  els.guidedRunPerformance.disabled = !workgroupPerformanceActionAvailable(selectedStatus) || Boolean(state.activeWorkgroupActionRunId);
-  els.guidedCompileWorkgroup.disabled = Boolean(state.activeWorkgroupActionRunId);
-  els.runRecommendedCorrectnessSequence.disabled = Boolean(state.activeWorkgroupActionRunId);
+  els.guidedRunSmallGate.disabled = !selectedSteps.compiled || experimentBusy;
+  els.guidedRunFull294.disabled = !selectedSteps.smallGate || experimentBusy;
+  els.guidedRunPerformance.disabled = !workgroupPerformanceActionAvailable(selectedStatus) || experimentBusy;
+  els.guidedCompileWorkgroup.disabled = experimentBusy;
+  els.runRecommendedCorrectnessSequence.disabled = experimentBusy;
   els.guidedWorkgroupDisabledReason.textContent = !selectedSteps.compiled
     ? `Next action: Compile WG${state.workgroupSize}`
     : !selectedSteps.smallGate
@@ -1083,13 +1257,13 @@ function renderWorkgroupExperiment() {
     ? `${WORKGROUP_EXPERIMENT_ACTION_LABELS[state.workgroupLastCompletedAction.completedActionType] || state.workgroupLastCompletedAction.completedActionType}; routing ${state.workgroupLastCompletedAction.actionRoutingConsistency ? "consistent" : "invalid"}`
     : "None";
   if (els.runWorkgroupPerformance) {
-    els.runWorkgroupPerformance.disabled = !workgroupPerformanceActionAvailable(selectedStatus);
+    els.runWorkgroupPerformance.disabled = experimentBusy || !workgroupPerformanceActionAvailable(selectedStatus);
   }
   if (els.runMatchedWorkgroupComparison) {
-    els.runMatchedWorkgroupComparison.disabled = !comparisonPrerequisites.available;
+    els.runMatchedWorkgroupComparison.disabled = experimentBusy || !comparisonPrerequisites.available;
   }
-  els.guidedRunMatchedComparison.disabled = !comparisonPrerequisites.available || Boolean(state.activeWorkgroupActionRunId);
-  els.prepareMatchedWorkgroups.disabled = Boolean(state.activeWorkgroupActionRunId);
+  els.guidedRunMatchedComparison.disabled = !comparisonPrerequisites.available || experimentBusy;
+  els.prepareMatchedWorkgroups.disabled = experimentBusy;
   els.matchedDisabledReason.textContent = comparisonPrerequisites.available
     ? "WG1 and WG32 are ready for matched comparison."
     : `Locked: ${comparisonPrerequisites.missing.join("; ") || "both sizes must pass current-session prerequisites"}.`;
@@ -1459,6 +1633,10 @@ async function runWorkgroupExperimentAction(requestedActionType) {
   const action = normalizeWorkgroupExperimentAction(requestedActionType);
   if (!state.capabilities?.supported) {
     setStatus("WebGPU is unavailable; workgroup-size experiment cannot run", "bad");
+    return;
+  }
+  if (state.correctnessExperiment.status === "running" || state.activeStandaloneExperiment || state.benchmark.running) {
+    setStatus("Another experiment is already running", "bad");
     return;
   }
   if (state.activeWorkgroupActionRunId !== null) {
@@ -1849,6 +2027,11 @@ async function runPlumbingProof() {
   const nonceStart = 0;
   const header80 = hexToBytes(CAPSTASH_POW_TEST_VECTORS[1].headerHex);
 
+  state.activeStandaloneExperiment = {
+    type: "webgpu_plumbing_proof",
+    source: "human-ui",
+    startedAt: new Date().toISOString(),
+  };
   els.start.disabled = true;
   els.stop.disabled = true;
   setStatus("Running WebGPU plumbing-only dispatch", "good");
@@ -1877,27 +2060,56 @@ async function runPlumbingProof() {
     renderBenchmark();
     setStatus(error instanceof Error ? error.message : String(error), "bad");
   } finally {
+    state.activeStandaloneExperiment = null;
     els.start.disabled = false;
     els.stop.disabled = true;
+    renderBenchmark();
   }
 }
 
-async function runWhirlpoolMinimalProof() {
+async function runWhirlpoolMinimalProof({ invocationSource = "human-ui" } = {}) {
+  const preset = selectedWgslPreset();
+  const verificationLevel = verificationLevelForPreset(preset);
+  if (isExperimentRunning()) {
+    setStatus("Another experiment is already running; correctness verification was not started", "bad");
+    return null;
+  }
   if (!state.capabilities?.supported) {
+    state.correctnessExperiment = {
+      status: "blocked",
+      source: invocationSource,
+      verificationLevel,
+      presetId: preset.id,
+      startedAt: null,
+      completedAt: new Date().toISOString(),
+      error: "WebGPU is unavailable; Whirlpool proof cannot run",
+    };
     setStatus("WebGPU is unavailable; Whirlpool proof cannot run", "bad");
-    return;
+    return null;
   }
 
-  els.start.disabled = true;
-  els.stop.disabled = true;
+  state.correctnessExperiment = {
+    status: "running",
+    source: invocationSource,
+    verificationLevel,
+    presetId: preset.id,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null,
+  };
+  disableWorkgroupActionControls(true);
   state.whirlpoolProgress = null;
-  const preset = selectedWgslPreset();
   if (preset.fullVector && (!state.coreVectorData || state.coreVectorSummary?.pending)) {
-    els.start.disabled = false;
-    els.stop.disabled = true;
+    state.correctnessExperiment = {
+      ...state.correctnessExperiment,
+      status: "blocked",
+      completedAt: new Date().toISOString(),
+      error: "Full 294-vector WGSL/Core verification requires generated Core vectors",
+    };
+    disableWorkgroupActionControls(false);
     setStatus("Full 294-vector WGSL/Core verification requires generated Core vectors", "bad");
     renderBenchmark();
-    return;
+    return null;
   }
   setStatus(preset.fullVector
     ? `Running full 294-vector WGSL/Core correctness verification with batch size ${state.wgslBatchSize}, workgroup size ${state.workgroupSize}`
@@ -1929,9 +2141,28 @@ async function runWhirlpoolMinimalProof() {
     state.benchmark.overheadMs = Math.max(0, result.totalElapsedMs - result.gpuElapsedMs);
     state.benchmark.peakHashPerSecond = result.totalElapsedMs > 0 ? (result.resultCount * 1000) / result.totalElapsedMs : 0;
     state.benchmark.minHashPerSecond = state.benchmark.peakHashPerSecond;
+    const completedExperiment = {
+      ...state.correctnessExperiment,
+      status: "completed",
+      completedAt: new Date().toISOString(),
+    };
+    const structuredResult = buildVerificationResult({
+      verificationLevel,
+      preset,
+      experiment: completedExperiment,
+      result,
+      coreComparison: state.coreWgslComparison,
+    });
+    state.correctnessExperiment = {
+      ...completedExperiment,
+      status: structuredResult.success ? "completed" : "failed",
+      error: structuredResult.failures[0]?.message || null,
+    };
     renderBenchmark();
     setStatus(result.shaderStatus, result.mismatchesAgainstCpuReference === 0 && !result.firstPipelineError ? "good" : "bad");
+    return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     state.whirlpoolResult = {
       shaderStatus: "Real WebGPU Whirlpool hashing: Failed verification",
       nonceCount: 0,
@@ -1945,14 +2176,21 @@ async function runWhirlpoolMinimalProof() {
       fixtureCasesExecuted: 0,
       fixtureCasesRejected: 0,
       firstMismatch: {
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       },
     };
+    state.correctnessExperiment = {
+      ...state.correctnessExperiment,
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      error: message,
+    };
     renderBenchmark();
-    setStatus(error instanceof Error ? error.message : String(error), "bad");
+    setStatus(message, "bad");
+    return state.whirlpoolResult;
   } finally {
-    els.start.disabled = false;
-    els.stop.disabled = true;
+    disableWorkgroupActionControls(false);
+    renderBenchmark();
   }
 }
 
@@ -1962,6 +2200,11 @@ async function runSyntheticBenchmarkMode() {
     return;
   }
 
+  state.activeStandaloneExperiment = {
+    type: "synthetic_nonce_benchmark",
+    source: "human-ui",
+    startedAt: new Date().toISOString(),
+  };
   els.start.disabled = true;
   els.stop.disabled = true;
   state.syntheticResult = null;
@@ -2029,8 +2272,10 @@ async function runSyntheticBenchmarkMode() {
     renderBenchmark();
     setStatus(error instanceof Error ? error.message : String(error), "bad");
   } finally {
+    state.activeStandaloneExperiment = null;
     els.start.disabled = false;
     els.stop.disabled = true;
+    renderBenchmark();
   }
 }
 
@@ -2040,6 +2285,11 @@ async function runSyntheticProfilingMode() {
     return;
   }
 
+  state.activeStandaloneExperiment = {
+    type: "synthetic_profiling",
+    source: "human-ui",
+    startedAt: new Date().toISOString(),
+  };
   els.start.disabled = true;
   els.stop.disabled = true;
   state.profilingResult = null;
@@ -2100,8 +2350,10 @@ async function runSyntheticProfilingMode() {
     renderBenchmark();
     setStatus(error instanceof Error ? error.message : String(error), "bad");
   } finally {
+    state.activeStandaloneExperiment = null;
     els.start.disabled = false;
     els.stop.disabled = true;
+    renderBenchmark();
   }
 }
 
@@ -2117,30 +2369,25 @@ function benchmarkStep() {
 }
 
 function startBenchmark() {
-  if (state.benchmark.running) return;
+  if (isExperimentRunning()) return;
   if (!state.correctness?.pass) {
     setStatus("Correctness tests failed; benchmark disabled", "bad");
     return;
   }
   if (state.executionMode === "webgpu-plumbing-only") {
-    runPlumbingProof();
-    return;
+    return runPlumbingProof();
   }
   if (state.executionMode === "webgpu-whirlpool-minimal") {
-    runWhirlpoolMinimalProof();
-    return;
+    return runWhirlpoolMinimalProof();
   }
   if (state.executionMode === "webgpu-synthetic-nonce-benchmark") {
-    runSyntheticBenchmarkMode();
-    return;
+    return runSyntheticBenchmarkMode();
   }
   if (state.executionMode === "webgpu-synthetic-profiling") {
-    runSyntheticProfilingMode();
-    return;
+    return runSyntheticProfilingMode();
   }
   if (state.executionMode === "webgpu-workgroup-experiment") {
-    runWorkgroupExperimentMode();
-    return;
+    return runWorkgroupExperimentMode();
   }
   if (!canRunHashBenchmark(state.executionMode)) {
     const execution = EXECUTION_MODES[state.executionMode];
@@ -2625,6 +2872,17 @@ export async function main() {
   setStatus(state.correctness.pass ? "Ready" : "Correctness failure", state.correctness.pass ? "good" : "bad");
   state.capabilities = await detectWebGPUCapabilities();
   renderCapabilities();
+  state.webmcpRegistration = await registerWebMCPChallengeTools({
+    modelContext: document.modelContext || null,
+    handlers: {
+      inspectComputeEnvironment: inspectComputeEnvironmentForWebMCP,
+      verifyCorrectness: verifyCorrectnessForWebMCP,
+      getExperimentStatus: getExperimentStatusForWebMCP,
+    },
+  });
+  if (state.webmcpRegistration.status === "registration_failed") {
+    console.warn(`WebMCP tool registration failed: ${state.webmcpRegistration.error}`);
+  }
 }
 
 main();

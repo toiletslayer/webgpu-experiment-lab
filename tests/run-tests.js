@@ -163,6 +163,15 @@ import {
   workgroupPerformanceActionAvailable,
   workgroupPerformanceEligible,
 } from "../src/webgpu/workgroup-experiment.js";
+import {
+  WEBMCP_TOOL_SCHEMAS,
+  WEBMCP_VERIFICATION_LEVELS,
+  buildComputeEnvironmentResult,
+  buildExperimentStatusResult,
+  buildVerificationResult,
+  createWebMCPChallengeTools,
+  registerWebMCPChallengeTools,
+} from "../src/webmcp/challenge-tools.js";
 
 function lcg(seed) {
   let state = seed >>> 0;
@@ -3413,4 +3422,164 @@ test("Core PoW generator embeds the current Milestone 6 fixtures and avoids SHA-
   assert.match(generator, /GetPoWHash/);
   assert.match(generator, /No SHA-256/);
   assert.doesNotMatch(generator, /CSHA256|CHash256|SerializeHash|HashWriter/);
+});
+
+test("WebMCP challenge tools expose three narrow user-goal schemas", async () => {
+  const calls = [];
+  const tools = createWebMCPChallengeTools({
+    inspectComputeEnvironment: () => ({ inspected: true }),
+    verifyCorrectness: ({ verificationLevel }) => {
+      calls.push(verificationLevel);
+      return { verificationLevel };
+    },
+    getExperimentStatus: () => ({ running: false }),
+  });
+  assert.deepEqual(tools.map((tool) => tool.name), [
+    "inspect_compute_environment",
+    "verify_correctness",
+    "get_experiment_status",
+  ]);
+  assert.deepEqual(tools[0].inputSchema, WEBMCP_TOOL_SCHEMAS.inspectComputeEnvironment);
+  assert.deepEqual(tools[1].inputSchema.properties.verification_level.enum, ["minimal", "full_294"]);
+  assert.deepEqual(tools[1].inputSchema.required, ["verification_level"]);
+  assert.equal(tools[0].annotations.readOnlyHint, true);
+  assert.equal(tools[1].annotations.readOnlyHint, false);
+  assert.deepEqual(await tools[0].execute({}), { inspected: true });
+  assert.deepEqual(await tools[1].execute({ verification_level: "full_294" }), { verificationLevel: "full_294" });
+  assert.deepEqual(await tools[2].execute({}), { running: false });
+  assert.deepEqual(calls, ["full_294"]);
+  assert.throws(() => tools[1].execute({ verification_level: "profiling" }), /Unsupported verification_level/);
+});
+
+test("WebMCP registration is optional and cleans up a partial registration failure", async () => {
+  const handlers = {
+    inspectComputeEnvironment: () => ({}),
+    verifyCorrectness: () => ({}),
+    getExperimentStatus: () => ({}),
+  };
+  const unavailable = await registerWebMCPChallengeTools({ modelContext: null, handlers });
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.status, "unavailable");
+
+  const registered = [];
+  const available = await registerWebMCPChallengeTools({
+    modelContext: {
+      async registerTool(tool, options) {
+        assert.equal(options.signal.aborted, false);
+        registered.push(tool.name);
+      },
+    },
+    handlers,
+  });
+  assert.equal(available.status, "registered");
+  assert.deepEqual(registered, ["inspect_compute_environment", "verify_correctness", "get_experiment_status"]);
+
+  let firstSignal;
+  let registrationAttempts = 0;
+  const failed = await registerWebMCPChallengeTools({
+    modelContext: {
+      async registerTool(_tool, options) {
+        firstSignal ||= options.signal;
+        registrationAttempts += 1;
+        if (registrationAttempts === 2) throw new Error("registration denied");
+      },
+    },
+    handlers,
+  });
+  assert.equal(failed.status, "registration_failed");
+  assert.equal(registrationAttempts, 2);
+  assert.equal(firstSignal.aborted, true);
+});
+
+test("WebMCP environment and status inspection never imply background computation", () => {
+  const environment = buildComputeEnvironmentResult({
+    capabilities: {
+      supported: true,
+      adapterAvailable: true,
+      adapterInfo: { vendor: "test-vendor" },
+      limits: { maxComputeInvocationsPerWorkgroup: 256 },
+      features: ["timestamp-query"],
+      error: null,
+    },
+    userAgent: "UnitTest Browser",
+    verificationPresets: WGSL_CORE_VERIFICATION_PRESETS,
+    batchSizes: WGSL_BATCH_SIZE_OPTIONS,
+    workgroupSizes: WORKGROUP_SIZE_OPTIONS,
+    running: false,
+    currentExperiment: null,
+  });
+  assert.equal(environment.webgpu.supported, true);
+  assert.equal(environment.experiment.running, false);
+  assert.equal(environment.boundaries.automaticOrBackgroundComputation, false);
+  assert.deepEqual(environment.supportedExperiments.correctnessVerification.workgroupSizes, WORKGROUP_SIZE_OPTIONS);
+  const status = buildExperimentStatusResult({
+    running: false,
+    current: null,
+    mostRecent: { type: "correctness_verification", status: "completed" },
+    verificationResult: { success: true },
+  });
+  assert.equal(status.mostRecent.status, "completed");
+  assert.equal(status.correctnessVerification.success, true);
+});
+
+test("WebMCP correctness result accepts only complete Core-identical verification", () => {
+  const experiment = {
+    status: "completed",
+    source: "webmcp",
+    startedAt: "2026-08-29T12:00:00.000Z",
+    completedAt: "2026-08-29T12:00:01.000Z",
+  };
+  const result = {
+    shaderStatus: "Full 294-vector WGSL/Core verification passed",
+    resultCount: 294,
+    dispatchCount: 294,
+    batchSize: 1,
+    workgroupSize: 1,
+    fixtureCasesExecuted: 294,
+    fixtureCasesRejected: 1,
+    mismatchesAgainstCpuReference: 0,
+    firstPipelineError: null,
+  };
+  const passed = buildVerificationResult({
+    verificationLevel: WEBMCP_VERIFICATION_LEVELS.full294,
+    preset: FULL_CORE_VECTOR_VERIFICATION_PRESET,
+    experiment,
+    result,
+    coreComparison: {
+      pending: false,
+      selectedVectorCount: 294,
+      matches: 294,
+      mismatches: [],
+    },
+  });
+  assert.equal(passed.success, true);
+  assert.equal(passed.selectedVectors, 294);
+  assert.equal(passed.matches, 294);
+  assert.equal(passed.mismatches.total, 0);
+  assert.equal(passed.boundaries.liveMining, false);
+
+  const rejected = buildVerificationResult({
+    verificationLevel: WEBMCP_VERIFICATION_LEVELS.full294,
+    preset: FULL_CORE_VECTOR_VERIFICATION_PRESET,
+    experiment,
+    result: { ...result, resultCount: 293 },
+    coreComparison: {
+      pending: false,
+      selectedVectorCount: 293,
+      matches: 293,
+      mismatches: [],
+    },
+  });
+  assert.equal(rejected.success, false);
+  assert.ok(rejected.failures.some((failure) => failure.code === "full_vector_count_invalid"));
+});
+
+test("WebMCP app adapter reuses the visible minimal Whirlpool workflow", () => {
+  const app = readFileSync(new URL("../src/ui/app.js", import.meta.url), "utf8");
+  const integration = readFileSync(new URL("../src/webmcp/challenge-tools.js", import.meta.url), "utf8");
+  assert.match(app, /registerWebMCPChallengeTools/);
+  assert.match(app, /await runWhirlpoolMinimalProof\(\{ invocationSource: "webmcp" \}\)/);
+  assert.match(app, /runWebGPUWhirlpoolFixtureSuite/);
+  assert.match(app, /renderBenchmark\(\)/);
+  assert.doesNotMatch(integration, /navigator\.gpu|requestAdapter|runWebGPUWhirlpoolFixtureSuite|createComputePipeline/);
 });
