@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CapStash Browser WebGPU Benchmark</title>
+    <link rel="stylesheet" href="./src/ui/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="topbar" aria-labelledby="title">
+        <div>
+          <p class="eyebrow">Research prototype</p>
+          <h1 id="title">CapStash Browser WebGPU Benchmark</h1>
+        </div>
+        <div id="status" class="status" data-kind="neutral">Loading</div>
+      </section>
+
+      <section class="grid metrics" aria-label="Browser WebGPU Performance">
+        <div>
+          <span>Active Execution Mode</span>
+          <strong id="activeMode">CPU JavaScript</strong>
+        </div>
+        <div>
+          <span>Hashing Backend</span>
+          <strong id="hashingBackend">CPU JavaScript</strong>
+        </div>
+        <div>
+          <span>GPU Used For Hashing</span>
+          <strong id="gpuHashing">No</strong>
+        </div>
+        <div>
+          <span>Average H/s or Results/s</span>
+          <strong id="average">0 H/s</strong>
+        </div>
+        <div>
+          <span>Peak H/s or Results/s</span>
+          <strong id="peak">0 H/s</strong>
+        </div>
+        <div>
+          <span>Minimum H/s or Results/s</span>
+          <strong id="minimum">0 H/s</strong>
+        </div>
+        <div>
+          <span>Total Hashes Completed</span>
+          <strong id="total">0</strong>
+        </div>
+        <div>
+          <span>Measured Elapsed Time</span>
+          <strong id="elapsed">0.00 s</strong>
+        </div>
+        <div>
+          <span>Setup / Validation</span>
+          <strong id="warmup">0.00 s / 0 hashes</strong>
+        </div>
+        <div>
+          <span>Runtime Split</span>
+          <strong id="workSplit">0.0% hash loop / 0.0% browser and JavaScript overhead</strong>
+        </div>
+        <div>
+          <span>Compute Shader</span>
+          <strong id="computeShader">Not implemented</strong>
+        </div>
+        <div>
+          <span>Hashes Per Dispatch</span>
+          <strong id="hashesPerDispatch">0</strong>
+        </div>
+        <div>
+          <span>WebGPU Nonce Count</span>
+          <strong id="nonceCount">0</strong>
+        </div>
+        <div>
+          <span>Hashes/Results Returned</span>
+          <strong id="resultsReturned">0</strong>
+        </div>
+        <div>
+          <span>Dispatch Count</span>
+          <strong id="dispatchCount">0</strong>
+        </div>
+        <div>
+          <span>Buffer Readback Time</span>
+          <strong id="readbackTime">0.00 s</strong>
+        </div>
+        <div>
+          <span>WebGPU Total Elapsed</span>
+          <strong id="webgpuElapsed">0.00 s</strong>
+        </div>
+        <div>
+          <span>Mismatches Against CPU Reference</span>
+          <strong id="cpuMismatches">0</strong>
+        </div>
+        <div>
+          <span>Fake Shader Verification Mismatches</span>
+          <strong id="plumbingMismatches">0</strong>
+        </div>
+        <div>
+          <span>Active Mode Status</span>
+          <strong id="whirlpoolStatus">Minimal/Core WGSL verification: not run in this mode</strong>
+        </div>
+      </section>
+
+      <section class="panel workflow" aria-labelledby="workflow-title">
+        <div class="workflow-header">
+          <div>
+            <h2 id="workflow-title">Guided Browser Test Workflow</h2>
+            <p>Choose one test type, then follow the ordered controls shown for that workflow. Advanced diagnostics and raw JSON remain available in Advanced mode.</p>
+          </div>
+          <div class="segments" role="group" aria-label="Interface mode">
+            <button id="guidedModeButton" class="active" type="button">Guided</button>
+            <button id="advancedModeButton" type="button">Advanced</button>
+          </div>
+        </div>
+        <div class="workflow-cards" role="group" aria-label="Choose test type">
+          <button class="workflow-card active" data-test-type="correctness" type="button">
+            <strong>Correctness verification</strong>
+            <span>Verify CPU and WGSL Whirlpool output against known fixtures and Core vectors.</span>
+          </button>
+          <button class="workflow-card" data-test-type="synthetic" type="button">
+            <strong>Synthetic benchmark</strong>
+            <span>Run a controlled local nonce batch with result readback and CPU spot checks.</span>
+          </button>
+          <button class="workflow-card" data-test-type="profiling" type="button">
+            <strong>Synthetic profiling</strong>
+            <span>Measure browser-observed profiling phases for the verified synthetic path.</span>
+          </button>
+          <button class="workflow-card" data-test-type="workgroup" type="button">
+            <strong>Workgroup experiment</strong>
+            <span>Compile and test one selected WGSL workgroup-size variant.</span>
+          </button>
+          <button class="workflow-card" data-test-type="matched" type="button">
+            <strong>Matched WG1-vs-WG32 comparison</strong>
+            <span>Run an alternating WG1-vs-WG32 comparison under the same browser session.</span>
+          </button>
+        </div>
+        <div class="primary-action-card">
+          <div>
+            <span>Recommended next action</span>
+            <strong id="recommendedNextAction">Run CPU/Core correctness checks</strong>
+            <p id="recommendedNextReason">Guided mode shows only controls that apply to the selected test.</p>
+          </div>
+          <button id="runRecommendedAction" class="primary" type="button">Run recommended action</button>
+        </div>
+        <div class="compact-result" aria-live="polite">
+          <h3>Compact Result Summary</h3>
+          <pre id="compactResultSummary">No guided action has completed yet.</pre>
+        </div>
+        <div class="reset-zone">
+          <p>Reset clears compiled pipeline session state, correctness prerequisites, profiling histories, matched comparison history, and the current result. Switching Guided/Advanced does not reset anything.</p>
+          <button id="resetBrowserTestSession" type="button">Reset current browser test session</button>
+        </div>
+      </section>
+
+      <section class="panel guided-panel" data-test-panel="workgroup" aria-labelledby="guided-workgroup-title">
+        <h2 id="guided-workgroup-title">WGSL Workgroup Experiment</h2>
+        <p>Controls how many GPU invocations are grouped together. It does not change the Whirlpool algorithm.</p>
+        <dl class="verification-grid">
+          <div><dt>Selected workgroup size</dt><dd id="guidedWorkgroupSize">1</dd></div>
+          <div><dt>Pipeline key</dt><dd id="guidedWorkgroupPipeline">whirlpool-batched-wg1</dd></div>
+          <div><dt>Device support</dt><dd id="guidedWorkgroupDevice">not checked</dd></div>
+          <div><dt>Compile status</dt><dd id="guidedWorkgroupCompile">not compiled</dd></div>
+          <div><dt>Small-gate status</dt><dd id="guidedWorkgroupSmallGate">not run</dd></div>
+          <div><dt>Full-294 status</dt><dd id="guidedWorkgroupFull294">pending</dd></div>
+          <div><dt>Performance eligibility</dt><dd id="guidedWorkgroupPerformance">locked</dd></div>
+          <div><dt>Profile status</dt><dd id="guidedWorkgroupProfile">not run</dd></div>
+          <div><dt>Recommendation status</dt><dd id="guidedWorkgroupRecommendation">No recommendation</dd></div>
+        </dl>
+        <ol class="checklist" id="workgroupChecklist"></ol>
+        <div class="actions">
+          <button id="runRecommendedCorrectnessSequence" class="primary" type="button">Run recommended correctness sequence</button>
+          <button id="guidedCompileWorkgroup" type="button">1. Compile selected variant</button>
+          <button id="guidedRunSmallGate" type="button">2. Run small correctness gate</button>
+          <button id="guidedRunFull294" type="button">3. Run full 294-vector verification</button>
+          <button id="guidedRunPerformance" type="button" disabled>4. Run performance profile</button>
+        </div>
+        <p id="guidedWorkgroupDisabledReason">Compile must precede the small gate; full 294 must precede profiling.</p>
+        <pre id="guidedWorkgroupProgress">Not running.</pre>
+      </section>
+
+      <section class="panel guided-panel" data-test-panel="matched" aria-labelledby="guided-matched-title">
+        <h2 id="guided-matched-title">Matched WG1 vs WG32 Comparison</h2>
+        <p>Runs alternating WG1 and WG32 Variant B samples only after both pipelines pass current-session correctness prerequisites.</p>
+        <div class="matched-prereqs">
+          <div>
+            <h3>WG1 prerequisites</h3>
+            <ul id="matchedWg1Checklist" class="checklist"></ul>
+          </div>
+          <div>
+            <h3>WG32 prerequisites</h3>
+            <ul id="matchedWg32Checklist" class="checklist"></ul>
+          </div>
+        </div>
+        <div class="nonce-control guided-inline">
+          <label for="guidedMatchedRepetitions">Repetitions per size</label>
+          <select id="guidedMatchedRepetitions"></select>
+          <p>Runs the same profile multiple times so timing variability can be measured.</p>
+        </div>
+        <p>Execution order: <strong id="matchedExecutionOrder">WG1, WG32, WG32, WG1, WG1, WG32</strong></p>
+        <div class="actions">
+          <button id="prepareMatchedWorkgroups" class="primary" type="button">Prepare WG1 and WG32</button>
+          <button id="guidedRunMatchedComparison" type="button" disabled>Run matched comparison</button>
+        </div>
+        <p id="matchedDisabledReason">Both sizes must pass compile, small gate, and full 294-vector verification first.</p>
+        <pre id="matchedProgress">Not running.</pre>
+      </section>
+
+      <section class="controls advanced-section" aria-label="Benchmark controls">
+        <div class="segments">
+          <button class="active" data-duration-mode="10s" type="button">10 seconds</button>
+          <button data-duration-mode="60s" type="button">60 seconds</button>
+          <button data-duration-mode="continuous" type="button">Continuous</button>
+        </div>
+        <div class="segments">
+          <button class="active" data-execution-mode="cpu-js" type="button">CPU JavaScript</button>
+          <button data-execution-mode="wasm" type="button">WASM</button>
+          <button data-execution-mode="webgpu-detect-only" type="button">WebGPU detected only</button>
+          <button data-execution-mode="webgpu-plumbing-only" type="button">WebGPU plumbing only</button>
+          <button data-execution-mode="webgpu-whirlpool-minimal" type="button">WebGPU Whirlpool minimal</button>
+          <button data-execution-mode="webgpu-synthetic-nonce-benchmark" type="button">Synthetic nonce benchmark</button>
+          <button data-execution-mode="webgpu-synthetic-profiling" type="button">Synthetic profiling run</button>
+          <button data-execution-mode="webgpu-workgroup-experiment" type="button">WGSL workgroup-size experiment</button>
+          <button data-execution-mode="webgpu-compute-real" type="button">WebGPU compute real</button>
+        </div>
+        <div class="nonce-control">
+          <label for="nonceCountInput">WebGPU nonce count</label>
+          <input id="nonceCountInput" type="number" min="1" max="4096" step="1" value="64" />
+        </div>
+        <div class="nonce-control">
+          <label for="wgslPresetSelect">Minimal/Core WGSL verification preset</label>
+          <select id="wgslPresetSelect"></select>
+          <p id="wgslPresetWarning">Used by Minimal/Core WGSL verification mode. Preset order: 1x1, 1x2, 1x4, 3x1, 3x2, 10x1. Subset checks are not full-vector verification. Full 294-vector WGSL/Core verification may take longer than subset checks. This is a correctness test, not a mining benchmark. Explicit workgroup experiment buttons use their own compile, small-gate, full-294, and profile actions. Selecting Full 294 here does not change a workgroup experiment button action.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="wgslBatchSizeSelect">WGSL batch size</label>
+          <select id="wgslBatchSizeSelect"></select>
+          <p>Correctness-only batched verification; not optimized mining performance. Batch size 1 keeps the known-good single-dispatch-per-hash path.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="syntheticHashCountSelect">Synthetic hash count</label>
+          <select id="syntheticHashCountSelect"></select>
+          <p>Controlled synthetic nonce-batch benchmark. This mode is not selected by default and does not run unless Start is clicked.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="syntheticDispatchBatchSizeSelect">Synthetic dispatch batch size</label>
+          <select id="syntheticDispatchBatchSizeSelect"></select>
+          <p>Each dispatch hashes one sequential synthetic nonce per WGSL invocation, then reads results back for accounting and CPU spot checks.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="profilingPresetSelect">Synthetic profiling preset</label>
+          <select id="profilingPresetSelect"></select>
+          <p>Profiling defaults to the known-good 8,192 hashes / batch 512 configuration. It does not run until Start is clicked.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="profilingReadbackStrategySelect">Profiling readback strategy</label>
+          <select id="profilingReadbackStrategySelect"></select>
+          <p>Variant A is the current readback-after-each-dispatch behavior. Variant B encodes multiple logical dispatches into one submission and one combined readback. The no-readback probe is profiling-only and is not a valid hash benchmark.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="profilingRepetitionSelect">Profiling repetitions</label>
+          <select id="profilingRepetitionSelect"></select>
+          <p>Repeated profiling summaries aggregate only matching profiling configurations.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="workgroupSizeSelect">Workgroup experiment size</label>
+          <select id="workgroupSizeSelect"></select>
+          <p>Experimental shader variant. Correctness must pass before performance results are accepted. Workgroup size 1 remains the verified reference.</p>
+        </div>
+        <div class="nonce-control">
+          <label for="workgroupRepetitionSelect">Workgroup profiling repetitions</label>
+          <select id="workgroupRepetitionSelect"></select>
+          <p>Used only after full 294-vector verification; the first manual action should run compile/device validation and the small gate only.</p>
+        </div>
+        <div class="actions">
+          <button id="start" class="primary" type="button">Start Benchmark</button>
+          <button id="stop" type="button" disabled>Stop</button>
+        </div>
+      </section>
+
+      <section class="panel advanced-section" data-test-panel="workgroup matched" aria-labelledby="workgroup-title">
+        <h2 id="workgroup-title">WGSL Workgroup-Size Experiment</h2>
+        <p>Correctness-gated experiment for compile-time `@workgroup_size(...)` variants. This panel does not change Whirlpool arithmetic, does not compare targets, and does not establish mining performance.</p>
+        <div class="actions">
+          <button id="compileWorkgroupVariant" type="button">Compile selected variant</button>
+          <button id="runWorkgroupSmallGate" type="button">Run small correctness gate</button>
+          <button id="runWorkgroupFull294" type="button">Run full 294-vector verification</button>
+          <button id="runWorkgroupPerformance" type="button" disabled>Run performance profile</button>
+          <button id="runMatchedWorkgroupComparison" type="button" disabled>Run matched WG1 vs WG32 comparison</button>
+        </div>
+        <dl class="verification-grid">
+          <div>
+            <dt>Reference Workgroup Size</dt>
+            <dd id="workgroupReference">1</dd>
+          </div>
+          <div>
+            <dt>Selected Experimental Size</dt>
+            <dd id="workgroupSelected">1</dd>
+          </div>
+          <div>
+            <dt>Pipeline Key</dt>
+            <dd id="workgroupPipelineKey">whirlpool-batched-wg1</dd>
+          </div>
+          <div>
+            <dt>Workgroups Per 512-Hash Chunk</dt>
+            <dd id="workgroupChunkWorkgroups">512</dd>
+          </div>
+          <div>
+            <dt>Total Invocations</dt>
+            <dd id="workgroupTotalInvocations">8192 active / 0 padded</dd>
+          </div>
+          <div>
+            <dt>Correctness Eligibility</dt>
+            <dd id="workgroupCorrectnessEligibility">Not run</dd>
+          </div>
+          <div>
+            <dt>Performance Eligibility</dt>
+            <dd id="workgroupPerformanceEligibility">Full 294 verification required</dd>
+          </div>
+          <div>
+            <dt>Recommendation Status</dt>
+            <dd id="workgroupRecommendation">No recommendation; at least three valid compatible repetitions per size are required.</dd>
+          </div>
+          <div>
+            <dt>Current Requested Action</dt>
+            <dd id="workgroupCurrentAction">None</dd>
+          </div>
+          <div>
+            <dt>Current Action Status</dt>
+            <dd id="workgroupActionStatus">Idle</dd>
+          </div>
+          <div>
+            <dt>Last Completed Action</dt>
+            <dd id="workgroupLastCompletedAction">None</dd>
+          </div>
+        </dl>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Workgroup size</th>
+                <th>Device support</th>
+                <th>Pipeline</th>
+                <th>Small gate</th>
+                <th>Full 294</th>
+                <th>Profiling</th>
+                <th>Mean total</th>
+                <th>Mean queue wait</th>
+                <th>H/s</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="workgroupStatusBody"></tbody>
+          </table>
+        </div>
+        <h3>Last Workgroup Experiment Result</h3>
+        <pre id="workgroupExperimentDetails">Not run</pre>
+        <div class="actions">
+          <button id="downloadWorkgroupExperiment" type="button" disabled>Download workgroup experiment JSON</button>
+          <button id="downloadMatchedWorkgroupComparison" type="button" disabled>Download matched comparison JSON</button>
+          <button id="clearSelectedWorkgroupHistory" type="button">Clear selected-size history</button>
+          <button id="clearWorkgroupHistory" type="button">Clear workgroup profile history</button>
+          <button id="clearMatchedWorkgroupComparison" type="button">Clear matched comparison history</button>
+        </div>
+      </section>
+
+      <section class="grid details advanced-section" aria-label="Environment and estimates">
+        <div>
+          <span>GPU Detected</span>
+          <strong id="gpu">Checking</strong>
+        </div>
+        <div>
+          <span>WebGPU Supported</span>
+          <strong id="webgpu">Checking</strong>
+        </div>
+        <div>
+          <span>WebGPU Vendor</span>
+          <strong id="vendor">Checking</strong>
+        </div>
+        <div>
+          <span>Browser Version</span>
+          <strong id="browser">Checking</strong>
+        </div>
+        <div>
+          <span>Native Projection Disabled</span>
+          <strong id="nativeEstimate">Waiting</strong>
+        </div>
+        <div>
+          <span>Browser Efficiency Projection</span>
+          <strong id="efficiency">Not calculated</strong>
+        </div>
+        <div>
+          <span>Temperature Warning</span>
+          <strong>Unavailable in browsers</strong>
+        </div>
+        <div>
+          <span>Correctness Gate</span>
+          <strong id="correctness">Running</strong>
+        </div>
+      </section>
+
+      <section class="panel advanced-section" aria-labelledby="limits-title">
+        <h2 id="limits-title">WebGPU Device Limits</h2>
+        <pre id="limits">Checking</pre>
+      </section>
+
+      <section class="panel advanced-section" aria-labelledby="mismatch-title">
+        <h2 id="mismatch-title">First CPU/GPU Whirlpool Mismatch</h2>
+        <pre id="firstMismatch">None</pre>
+      </section>
+
+      <section class="panel" data-test-panel="correctness" aria-labelledby="whirlpool-verification-title">
+        <h2 id="whirlpool-verification-title">Minimal/Core Fixture Verification Session</h2>
+        <dl class="verification-grid">
+          <div>
+            <dt>Current Fixture</dt>
+            <dd id="whirlpoolFixture">Not run</dd>
+          </div>
+          <div>
+            <dt>Nonce Counts</dt>
+            <dd id="whirlpoolNonceCounts">Not run</dd>
+          </div>
+          <div>
+            <dt>Fixture Cases</dt>
+            <dd id="whirlpoolCases">0 / 0</dd>
+          </div>
+          <div>
+            <dt>Core Vector Warning</dt>
+            <dd id="whirlpoolCoreWarning">Not verified yet.</dd>
+          </div>
+        </dl>
+        <h3>Tested Nonces</h3>
+        <pre id="whirlpoolTestedNonces">Not run</pre>
+      </section>
+
+      <section class="panel" data-test-panel="correctness" aria-labelledby="core-vector-title">
+        <h2 id="core-vector-title">CapStash Core Vector Verification</h2>
+        <dl class="verification-grid">
+          <div>
+            <dt>Core Vector Status</dt>
+            <dd id="coreVectorStatus">CapStash Core vectors: pending</dd>
+          </div>
+          <div>
+            <dt>Core Vectors Loaded</dt>
+            <dd id="coreVectorCount">0</dd>
+          </div>
+          <div>
+            <dt>CPU Reference Against Core</dt>
+            <dd id="coreCpuStatus">Pending</dd>
+          </div>
+          <div>
+            <dt>Documented WGSL/Core Verification</dt>
+            <dd id="documentedWgslCoreStatus">Full 294-vector pass documented</dd>
+          </div>
+          <div>
+            <dt>This Session WGSL/Core Verification</dt>
+            <dd id="coreWgslStatus">Pending</dd>
+          </div>
+          <div>
+            <dt>WGSL Verification Subset</dt>
+            <dd id="wgslSubset">Not run</dd>
+          </div>
+          <div>
+            <dt>WGSL Vectors Selected</dt>
+            <dd id="wgslVectorsSelected">Not run</dd>
+          </div>
+          <div>
+            <dt>WGSL Batch Size</dt>
+            <dd id="wgslBatchSize">1</dd>
+          </div>
+          <div>
+            <dt>WGSL Shader Size</dt>
+            <dd id="wgslShaderSize">Not run</dd>
+          </div>
+          <div>
+            <dt>This Run Shader Generation</dt>
+            <dd id="shaderGenerationTime">Not run</dd>
+          </div>
+          <div>
+            <dt>This Run Shader Module Creation</dt>
+            <dd id="shaderModuleCreationTime">Not run</dd>
+          </div>
+          <div>
+            <dt>Current Run Pipeline Creation</dt>
+            <dd id="pipelineCreationTime">Not run</dd>
+          </div>
+          <div>
+            <dt>Historical Cold Compile Observation</dt>
+            <dd id="originalColdCompileTime">Not run</dd>
+          </div>
+          <div>
+            <dt>Current Run Pipeline Cache Status</dt>
+            <dd id="pipelineReuse">Not run</dd>
+          </div>
+          <div>
+            <dt>Historical Cold Compile Timestamp</dt>
+            <dd id="historicalColdCompileTimestamp">Not run</dd>
+          </div>
+          <div>
+            <dt>Historical Cold Compile Applies To Current Run</dt>
+            <dd id="historicalColdCompileApplies">Not run</dd>
+          </div>
+          <div>
+            <dt>Pipeline Timeout Setting</dt>
+            <dd id="pipelineTimeout">Not run</dd>
+          </div>
+          <div>
+            <dt>This Run Total Elapsed</dt>
+            <dd id="coldTotalTime">Not run</dd>
+          </div>
+          <div>
+            <dt>This Run Total Diagnostics</dt>
+            <dd id="thisRunTotalElapsed">Not run</dd>
+          </div>
+          <div>
+            <dt>Warm Dispatch Time</dt>
+            <dd id="warmDispatchTime">Not run</dd>
+          </div>
+          <div>
+            <dt>Buffer Setup Time</dt>
+            <dd id="bufferSetupTime">Not run</dd>
+          </div>
+          <div>
+            <dt>CPU Comparison Time</dt>
+            <dd id="cpuComparisonTime">Not run</dd>
+          </div>
+          <div>
+            <dt>Verified H/s Excluding Pipeline</dt>
+            <dd id="verifiedRateExcludingPipeline">Not run</dd>
+          </div>
+          <div>
+            <dt>Verified H/s Including Pipeline</dt>
+            <dd id="verifiedRateIncludingPipeline">Not run</dd>
+          </div>
+          <div>
+            <dt>Pipeline Error</dt>
+            <dd id="pipelineError">None</dd>
+          </div>
+        </dl>
+        <h3>First Core Mismatch</h3>
+        <pre id="coreMismatchDetails">None</pre>
+        <h3>Pipeline Diagnostics</h3>
+        <pre id="pipelineDiagnostics">None</pre>
+      </section>
+
+      <section class="panel" data-test-panel="synthetic" aria-labelledby="synthetic-title">
+        <h2 id="synthetic-title">Controlled Synthetic Nonce-Batch Benchmark</h2>
+        <p>Correctness-gated local browser research only. This mode uses a fixed verified fixture header, generates sequential nonce ranges locally, runs WGSL Whirlpool over synthetic batches, reads results back, and CPU spot-checks selected nonces. It does not compare targets, connect to pools, submit blocks, use wallets, track payouts, or represent production mining performance.</p>
+        <dl class="verification-grid">
+          <div>
+            <dt>Synthetic Mode Status</dt>
+            <dd id="syntheticModeStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Synthetic WGSL Whirlpool</dt>
+            <dd id="syntheticWgslStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Core-vector WGSL Verification This Session</dt>
+            <dd id="syntheticCoreSessionStatus">Not run in synthetic mode</dd>
+          </div>
+          <div>
+            <dt>Telemetry Consistency</dt>
+            <dd id="syntheticTelemetryStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Fixture/Header</dt>
+            <dd id="syntheticFixture">Not run</dd>
+          </div>
+          <div>
+            <dt>Start/End Nonce</dt>
+            <dd id="syntheticNonceRange">Not run</dd>
+          </div>
+          <div>
+            <dt>Total Requested</dt>
+            <dd id="syntheticRequested">0</dd>
+          </div>
+          <div>
+            <dt>Hashes Completed</dt>
+            <dd id="syntheticCompleted">0</dd>
+          </div>
+          <div>
+            <dt>Dispatch Batch Size</dt>
+            <dd id="syntheticDispatchBatchSize">64</dd>
+          </div>
+          <div>
+            <dt>Dispatch Count</dt>
+            <dd id="syntheticDispatchCount">0</dd>
+          </div>
+          <div>
+            <dt>Hashes Per Dispatch</dt>
+            <dd id="syntheticHashesPerDispatch">Not run</dd>
+          </div>
+          <div>
+            <dt>Correctness Gate</dt>
+            <dd id="syntheticGateStatus">Automatic gate not run</dd>
+          </div>
+          <div>
+            <dt>CPU Spot-Check Status</dt>
+            <dd id="syntheticSpotCheckStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>CPU Spot-Check Count</dt>
+            <dd id="syntheticSpotCheckCount">0</dd>
+          </div>
+          <div>
+            <dt>Verified H/s Including Pipeline</dt>
+            <dd id="syntheticRateIncludingPipeline">Not run</dd>
+          </div>
+          <div>
+            <dt>Verified H/s Excluding Pipeline</dt>
+            <dd id="syntheticRateExcludingPipeline">Not run</dd>
+          </div>
+          <div>
+            <dt>Synthetic Benchmark Diagnostics</dt>
+            <dd id="syntheticTiming">Not run</dd>
+          </div>
+          <div>
+            <dt>Automatic Correctness-Gate Diagnostics</dt>
+            <dd id="syntheticGateTiming">Automatic gate not run</dd>
+          </div>
+          <div>
+            <dt>Workgroup Dispatch Model</dt>
+            <dd id="syntheticWorkgroupModel">Not run</dd>
+          </div>
+          <div>
+            <dt>Device Workgroup Limit</dt>
+            <dd id="syntheticWorkgroupLimit">Not run</dd>
+          </div>
+        </dl>
+        <div class="actions">
+          <button id="copySyntheticResult" type="button" disabled>Copy benchmark result</button>
+          <button id="downloadSyntheticResult" type="button" disabled>Download benchmark result JSON</button>
+          <button id="downloadSyntheticSummary" type="button" disabled>Download repeated-run summary JSON</button>
+          <button id="clearSyntheticHistory" type="button" disabled>Clear session history</button>
+        </div>
+        <h3>First Synthetic Mismatch</h3>
+        <pre id="syntheticFirstMismatch">None</pre>
+        <h3>Compatible Repeated-Run Summary</h3>
+        <dl class="verification-grid">
+          <div>
+            <dt>Summary Status</dt>
+            <dd id="syntheticSummaryStatus">No compatible repeated runs in this session</dd>
+          </div>
+          <div>
+            <dt>Compatible Runs</dt>
+            <dd id="syntheticSummaryCompatibleRuns">0</dd>
+          </div>
+          <div>
+            <dt>Valid Runs</dt>
+            <dd id="syntheticSummaryValidRuns">0</dd>
+          </div>
+          <div>
+            <dt>Invalid Runs</dt>
+            <dd id="syntheticSummaryInvalidRuns">0</dd>
+          </div>
+          <div>
+            <dt>H/s Including Pipeline Stats</dt>
+            <dd id="syntheticSummaryHpsIncluding">No compatible valid runs</dd>
+          </div>
+          <div>
+            <dt>H/s Excluding Pipeline Stats</dt>
+            <dd id="syntheticSummaryHpsExcluding">No compatible valid runs</dd>
+          </div>
+          <div>
+            <dt>Dispatch Time Stats</dt>
+            <dd id="syntheticSummaryDispatch">No compatible valid runs</dd>
+          </div>
+          <div>
+            <dt>Total Elapsed Stats</dt>
+            <dd id="syntheticSummaryTotal">No compatible valid runs</dd>
+          </div>
+          <div>
+            <dt>Variation Interpretation</dt>
+            <dd id="syntheticSummaryInterpretation">Insufficient repeated runs for variability statistics</dd>
+          </div>
+        </dl>
+        <h3>Session History</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hash Count</th>
+                <th>Batch</th>
+                <th>Gate</th>
+                <th>Spot Checks</th>
+                <th>Dispatches</th>
+                <th>Dispatch Time</th>
+                <th>Total Elapsed</th>
+                <th>H/s Incl. Pipeline</th>
+                <th>H/s Excl. Pipeline</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="syntheticHistoryBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" data-test-panel="profiling" aria-labelledby="profiling-title">
+        <h2 id="profiling-title">Synthetic Profiling Run</h2>
+        <p>Correctness-gated browser-observed profiling for the verified synthetic WGSL Whirlpool path. This panel does not expose GPU hardware counters and does not establish native miner performance.</p>
+        <dl class="verification-grid">
+          <div>
+            <dt>Profiling Status</dt>
+            <dd id="profilingStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Profiling Preset</dt>
+            <dd id="profilingPreset">8,192 hashes / batch 512</dd>
+          </div>
+          <div>
+            <dt>Readback Strategy</dt>
+            <dd id="profilingReadbackStrategy">Variant A - current per-dispatch readback</dd>
+          </div>
+          <div>
+            <dt>Repetitions</dt>
+            <dd id="profilingRepetitions">1</dd>
+          </div>
+          <div>
+            <dt>Correctness Gate</dt>
+            <dd id="profilingGateStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>CPU Spot Checks</dt>
+            <dd id="profilingSpotCheckStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Mismatch / Pipeline Status</dt>
+            <dd id="profilingMismatchStatus">Not run</dd>
+          </div>
+          <div>
+            <dt>Timing Source</dt>
+            <dd id="profilingTimingSource">Browser-observed timing only; no GPU hardware counters.</dd>
+          </div>
+        </dl>
+        <h3>Host-Side Phase Timing</h3>
+        <pre id="profilingPhaseBreakdown">Not run</pre>
+        <h3>Profiling Interpretation</h3>
+        <pre id="profilingInterpretation">Not run</pre>
+        <h3>Repetition Statistics</h3>
+        <pre id="profilingStats">Not run</pre>
+        <h3>Variant A/B Compatible Comparison</h3>
+        <pre id="profilingStrategyComparison">Insufficient compatible runs</pre>
+        <h3>Per-Dispatch Timing Preview</h3>
+        <pre id="profilingDispatchPreview">Not run</pre>
+        <div class="actions">
+          <button id="downloadProfilingResult" type="button" disabled>Download profiling result JSON</button>
+          <button id="downloadProfilingSummary" type="button" disabled>Download profiling summary JSON</button>
+        </div>
+        <h3>Profiling Session History</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hash Count</th>
+                <th>Batch</th>
+                <th>Strategy</th>
+                <th>Dispatches</th>
+                <th>Total</th>
+                <th>Queue Wait</th>
+                <th>Readback</th>
+                <th>CPU Validation</th>
+                <th>Interpretation</th>
+                <th>Scope</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="profilingHistoryBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel advanced-section" aria-labelledby="limitations-title">
+        <h2 id="limitations-title">Browser Limitations</h2>
+        <p id="executionNote">Hashes are computed by the JavaScript CPU reference implementation on the browser main thread.</p>
+        <ul>
+          <li>`webgpu-plumbing-only` executes a temporary fake shader on the GPU to prove buffer layout, nonce mapping, dispatch, and readback.</li>
+          <li>`webgpu-plumbing-only` is not CapStash hashing, and CPU-reference mismatches are expected in that mode.</li>
+          <li>`webgpu-whirlpool-minimal` is correctness-only and supports tiny nonce counts while the real WGSL Whirlpool path is audited.</li>
+          <li>WGSL/Core results are selected-subset results unless the Core panel explicitly says `WGSL/Core verification: Full 294-vector pass`.</li>
+          <li>Full 294-vector verification is manual only and remains correctness-only, not optimized.</li>
+          <li>`webgpu-synthetic-nonce-benchmark` is a controlled synthetic local benchmark mode with an automatic correctness gate and CPU spot checks.</li>
+          <li>`webgpu-synthetic-profiling` profiles browser-observed host phases for the verified synthetic path and does not expose shader-internal GPU counters.</li>
+          <li>Current verified shader uses @workgroup_size(1); batch size 512 means 512 one-invocation workgroups.</li>
+          <li>Variant B profiling records logical dispatch count separately from physical queue submissions, queue waits, and combined readbacks.</li>
+          <li>The no-readback profiling probe is not a valid hash benchmark because output correctness is not established by that run alone.</li>
+          <li>Synthetic benchmark results are not target comparisons, not pool mining, not live network submission, and not profitability evidence.</li>
+          <li>Pipeline creation currently dominates timing for the observed minimal Whirlpool run.</li>
+          <li>Do not treat any WebGPU mode as a production miner.</li>
+          <li>Browsers do not expose reliable GPU temperature, power, clock, or fan telemetry to pages.</li>
+          <li>WebGPU adapter names may be redacted by privacy settings or browser policy.</li>
+          <li>Values shown here are Browser WebGPU Performance, not native CUDA, OpenCL, Vulkan, or CPU mining performance.</li>
+        </ul>
+      </section>
+
+      <section class="panel advanced-section" aria-labelledby="tests-title">
+        <h2 id="tests-title">Automated Correctness Tests</h2>
+        <ul id="testList"></ul>
+      </section>
+    </main>
+    <script type="module" src="./src/ui/app.js"></script>
+  </body>
+</html>

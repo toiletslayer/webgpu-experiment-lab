@@ -1,0 +1,22 @@
+{
+  "name": "caps-webgpu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CapStash browser WebGPU Proof-of-Work correctness and benchmark research prototype.",
+  "scripts": {
+    "test": "node --test tests/run-tests.js",
+    "compare:core-vectors": "node scripts/compare-core-vectors.js",
+    "doctor": "node scripts/doctor.js",
+    "dev": "node scripts/dev-server.js",
+    "serve": "node scripts/dev-server.js"
+  },
+  "keywords": [
+    "capstash",
+    "webgpu",
+    "whirlpool",
+    "benchmark",
+    "proof-of-work"
+  ],
+  "license": "MIT"
+}

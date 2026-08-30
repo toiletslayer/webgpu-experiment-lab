@@ -1,0 +1,42 @@
+name: Correctness CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caps-webgpu-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    name: Node correctness checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install project
+        run: npm ci
+
+      - name: Environment doctor
+        run: npm run doctor
+
+      - name: Unit and regression tests
+        run: npm test
+
+      - name: Compare generated Core vectors
+        run: npm run compare:core-vectors
