@@ -132,8 +132,17 @@ WebMCP is an experimental progressive enhancement. For local Chrome testing:
 4. Use Chrome's Model Context Tool Inspector or a compatible browser agent.
 
 Browsers without `document.modelContext` keep the full ordinary UI and start no
-extra work. A future public hostname will need its exact WebMCP origin-trial
-registration while the trial remains required; see [DEPLOYMENT.md](./DEPLOYMENT.md).
+extra work. The production application is available at
+[https://webgpu-experiment-lab.pages.dev](https://webgpu-experiment-lab.pages.dev).
+That exact origin is registered for the Chrome WebMCP origin trial, and
+Cloudflare Pages delivers the origin-bound token through the committed
+`_headers` configuration.
+
+Ordinary Chrome validation on the production origin confirmed that
+`window.originAgentCluster === true`, `document.modelContext` exists, all four
+tools (`get_experiment_status`, `inspect_compute_environment`,
+`start_workgroup_comparison`, and `verify_correctness`) register, and the page
+loads idle with no automatic GPU workload. See [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Consent and computation boundaries
 
@@ -208,12 +217,12 @@ browser/session observation.
 Further limits are documented in [WEBGPU_LIMITATIONS.md](./WEBGPU_LIMITATIONS.md)
 and [docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md).
 
-## Static deployment preparation
+## Production deployment
 
-The application is static. A root `_headers` file prepares security headers for
-Cloudflare Pages without Workers or Functions. Nothing in this repository
-deploys automatically, and no origin-trial token is committed. See
-[DEPLOYMENT.md](./DEPLOYMENT.md).
+The application is deployed as a static Cloudflare Pages site at
+[https://webgpu-experiment-lab.pages.dev](https://webgpu-experiment-lab.pages.dev).
+A root `_headers` file supplies the security and WebMCP origin-trial response
+headers without Workers or Functions. See [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## License and attribution
 
@@ -235,4 +244,4 @@ Core vector-generation procedure is in
 - [Workgroup experiment runbook](./WORKGROUP_EXPERIMENT_RUNBOOK.md)
 - [WebMCP challenge record](./WEBMCP_CHALLENGE.md)
 - [Challenge provenance](./PROVENANCE.md)
-- [Static deployment preparation](./DEPLOYMENT.md)
+- [Production deployment](./DEPLOYMENT.md)
