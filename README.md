@@ -158,6 +158,13 @@ loads idle with no automatic GPU workload. See [DEPLOYMENT.md](./DEPLOYMENT.md).
 - Already-submitted WebGPU dispatches cannot necessarily be interrupted, so the
   interface does not claim fake cancellation.
 
+## Outside hardware testing
+
+Results from hardware/browser families not represented in the existing evidence
+are especially useful. Start with correctness, not speed. See
+[HARDWARE_TESTING.md](./HARDWARE_TESTING.md) and
+[HARDWARE_TEST_RESULT_TEMPLATE.md](./HARDWARE_TEST_RESULT_TEMPLATE.md).
+
 ## Reproducibility and tests
 
 ```powershell
