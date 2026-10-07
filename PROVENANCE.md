@@ -2,7 +2,7 @@
 
 This project existed before the OpenAI WebMCP Challenge. The public repository
 is [toiletslayer/webgpu-experiment-lab](https://github.com/toiletslayer/webgpu-experiment-lab).
-Its history was reconstructed to replace private commit metadata while
+Its history was reconstructed to remove personal commit metadata while
 preserving the corresponding project snapshots.
 
 | Milestone | Private development commit | Public equivalent |
