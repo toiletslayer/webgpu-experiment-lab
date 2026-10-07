@@ -3809,7 +3809,7 @@ test("release safety notices, licensing, provenance, and static headers are pres
   assert.match(provenance, /reconstruct.*personal commit metadata/i);
   assert.match(headers, /Origin-Agent-Cluster: \?1/);
   assert.match(headers, /Permissions-Policy: tools=\(self\)/);
-  assert.doesNotMatch(headers, /^\s*Origin-Trial:\s*\S+/m);
+  assert.match(headers, /^\s*Origin-Trial:\s*\S+/m);
   assert.match(deployment, /localhost development only/i);
   assert.match(deployment, /must not be exposed as the\s+public deployment server/i);
 });
