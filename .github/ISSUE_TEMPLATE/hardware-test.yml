@@ -1,0 +1,116 @@
+name: Hardware test result
+description: Report WebGPU correctness on a GPU/browser environment
+title: "[hardware] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing CAP WebGPU on another machine.
+
+        Please run correctness first. A failure is useful evidence too.
+        Do not include wallet information, account credentials, browser-profile
+        data, or unrelated system logs.
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Overall result
+      options:
+        - PASS
+        - FAIL
+        - INCOMPLETE
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 24H2 / Ubuntu 26.04 / macOS 27 / etc."
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: "Chrome 155 / Edge 155 / Safari ..."
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / adapter
+      placeholder: "Radeon RX 7900 XTX / Intel Arc A770 / Apple M4 / RTX 3080"
+    validations:
+      required: true
+
+  - type: input
+    id: vendor
+    attributes:
+      label: GPU vendor
+      placeholder: "AMD / Intel / Apple / NVIDIA"
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: Driver version
+      description: Leave blank if it is not easy to determine.
+
+  - type: dropdown
+    id: flag
+    attributes:
+      label: Was WebGPU available without an experimental browser flag?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: matched
+    attributes:
+      label: Core vectors matched
+      placeholder: "294"
+    validations:
+      required: true
+
+  - type: input
+    id: mismatches
+    attributes:
+      label: Mismatch count
+      placeholder: "0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Pipeline / device error
+      description: If the run failed, paste only the relevant browser/app error text.
+      placeholder: "Leave blank if none."
+
+  - type: textarea
+    id: profiling
+    attributes:
+      label: Optional profiling result
+      description: Only if correctness passed. Include workflow, sample count, throughput and variability if available.
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything reproducible about this environment that may help compare results.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Evidence check
+      options:
+        - label: I did not include wallet secrets, account credentials, browser-profile data, or unrelated private logs.
+          required: true
