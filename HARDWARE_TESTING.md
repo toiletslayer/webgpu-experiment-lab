@@ -79,6 +79,15 @@ Browser timing can vary because of:
 A high-variance result is valid evidence. Do not turn a noisy result into a
 claimed recommendation.
 
+## Reporting the result
+
+If you have a GitHub account, the easiest handoff is to open a **Hardware test
+result** issue in this repository. The issue form asks for the same fields below
+and keeps reports comparable across machines.
+
+If you do not use GitHub, paste the text template below into Discord or send it
+to the project operator.
+
 ## Result template
 
 ```text
