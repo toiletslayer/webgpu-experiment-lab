@@ -163,7 +163,9 @@ loads idle with no automatic GPU workload. See [DEPLOYMENT.md](./DEPLOYMENT.md).
 Results from hardware/browser families not represented in the existing evidence
 are especially useful. Start with correctness, not speed. See
 [HARDWARE_TESTING.md](./HARDWARE_TESTING.md) and
-[HARDWARE_TEST_RESULT_TEMPLATE.md](./HARDWARE_TEST_RESULT_TEMPLATE.md).
+[HARDWARE_TEST_RESULT_TEMPLATE.md](./HARDWARE_TEST_RESULT_TEMPLATE.md). GitHub
+users can submit the result through the repository's **Hardware test result**
+issue form.
 
 ## Reproducibility and tests
 
