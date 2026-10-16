@@ -9,6 +9,27 @@ workflows.
 > blockchain network, pool, wallet, payout system, RPC service, or
 > block-submission service.
 
+## Try it in your browser
+
+The public lab is here:
+
+**https://webgpu-experiment-lab.pages.dev**
+
+If you want to help test another GPU/browser environment:
+
+1. open the public lab in a current WebGPU-capable browser;
+2. run the **full 294-vector correctness verification**;
+3. record whether it reports `294 / 294` with `0 mismatches`;
+4. if you use GitHub, open a **Hardware test result** issue in this repository,
+   or send the result through the community channel where you received the link.
+
+AMD, Intel, Apple Silicon, Linux, and NVIDIA architectures/browser combinations
+that are not already represented in the evidence are especially useful.
+
+You do not need a CAP wallet, node, mining pool account, or repository checkout
+for this test. Correctness results are useful even if performance is modest or
+the test fails.
+
 This is not a production miner. It does not perform target comparison, find or
 submit blocks, hold keys, calculate payouts, or run automatic/background
 computation. Correctness gates remain authoritative over every profiling result
